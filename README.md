@@ -1,5 +1,6 @@
 # Project_Jia
 AI bot that can chat and converse on Discord
+
 디스코드에서 지아와 함께 채팅 또는 대화를 하며 대화해봅시다!
 
 ⚠️ 제작자는 Python을 주로 다루는 개발자가 아닙니다! 내부 코드 혹은 로직이 이상할 수 있으며, 그로 인한 버그가 많이 발생할 수 있습니다.
