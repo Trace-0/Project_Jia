@@ -61,7 +61,7 @@ Hugging Face에서 'kss ko'로 검색하면 모델이 몇 가지 나오는데 �
 
 ## pyvenv형태(파이썬 가상환경)로 받기
 
-1. https://github.com/Defined000/Project_Jia/releases/tag/v1.0.0 에서 파일을 다운로드 받아요.
+1. https://github.com/Trace-0/Project_Jia/releases/tag/v1.0.0 에서 파일을 다운로드 받아요.
 2. 받은 파일의 압축을 해제해주세요.
 3. TTS 모델을 파일 안으로 옮겨주세요.
 4. 'settings.json' 파일을 열고 주석에 적힌대로 진행해주세요.
