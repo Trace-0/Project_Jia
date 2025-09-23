@@ -36,6 +36,61 @@ AI bot that can chat and converse on Discord
 2. 입력된 내용을 먼저 Faiss라는 유사도 검색 벡터에 넣어 입력된 텍스트와 가장 유사한 기억을 최대 3개까지 불러와요.
 3. 유사한 기억과 입력된 텍스트를 LangGraph에 넣어 LLM이 응답을 생성하도록 만들어요.
 4. LLM이 필요에 따라 MCP 서버를 사용할 수 있어요. (기본적으로 DuckDuckGoSearch MCP 서버가 연결되어 있어요.)
+5. LLM이 응답을 생성해내면 discord.py가 응답을 채팅으로 출력해요.
+
+
+## 설치
+
+### 설치하기전에 필요한 것이 있어요.
+
+1. Ollama
+2. KSS기반 TTS 모델 (ESPnet에서 사용할 수 있는지 확인해야 해요.)
+3. 디스코드 봇 토큰
+
+### Ollama
+
+ollama는 https://ollama.com/ 에서 다운로드 받을 수 있어요.
+
+### KSS기반 TTS 모델
+
+Hugging Face에서 'kss ko'로 검색하면 모델이 몇 가지 나오는데 여기에서 ESPnet 예제가 있는지 확인해야해요. ESPnet 예제가 있다면 다운로드하여 압축 파일(.zip)형태로 준비해주세요.
+
+### 디스코드 봇 토큰
+
+디스코드 봇 토큰은 https://discord.com/developers/applications 에서 생성할 수 있어요. 자세한 내용은 인터넷을 검색하는걸 추천드려요.
+
+## Embedded python 버전으로 받기
+
+1. [여기](https://github.com/Trace-0/Project_Jia/releases/tag/v1.0.1)에서 파일을 다운로드 받아요.
+2. 받은 파일의 압축을 해제해주세요.
+3. TTS 모델을 파일 안으로 옮겨주세요.
+4. 'settings.json' 파일을 열고 주석에 적힌대로 진행해주세요.
+5. 'RUN_FIRST.bat' 파일을 실행해주세요.
+6. 'RUN_SECOND.bat' 파일을 실행해주세요. 관리자 권한을 요구하는 창이 나온다면 '예'를 선택해주세요. (ESPnet의 문제로 TTS모델이 변경되면 관리자 권한이 필요합니다.)
+7. (다음부터는 'start.bat' 파일로 실행할 수 있어요. 하지만, TTS 모델이 바뀐다면 'RUN_SECOND.bat' 파일로 한 번은 실행해야해요.)
+8. 이제 지아와 대화해보죠!
+
+## source 그대로 받기 (python에 대한 지식이 약간 있다고 가정할게요)
+
+1. python 3.10이 있는지 확인해요.
+2. source 파일을 그대로 다운로드 받아요.
+3. pip를 이용해 'requirements.txt'를 모두 다운받아요.
+4. 'Source/config/Settings.json'을 열고 주석에 적힌대로 진행해주세요.
+5. 관리자 권한을 받은 상태로 'Source/main.py'를 실행해요.
+6. (다음부터는 관리자 권한 없이 'Source/main.py'를 실행할 수 있어요. 하지만, TTS 모델이 바뀐다면 관리자 권한을 받고 'Source/main.py'를 실행해야해요.)
+7. 이제 지아와 대화해보죠!
+
+
+## 지아의 커맨드
+
+1. /jia ,  /지아                    -  이 커맨드 뒤에 적히는 내용은 지아가 대답해줘요! 예) /지아 안녕?
+2. /jiajoin                         -  이 커맨드를 사용하면 지아가 통화방에 들어와요!
+3. /jialeave                        -  이 커맨드를 사용하면 지아가 통화방에서 나가요. :(
+4. /jiareload                       -  이 커맨드를 사용하면 지아의 설정을 다시 불러와요.
+5. /jiasavesetting                  -  이 커맨드를 사용하면 현재 지아의 설정을 setting.json에 저장해요.
+6. /jiaaddslang [단어] [의미] [예시] -  이 커맨드를 사용하면 지아가 참고할 수 있는 단어 사전에 단어를 추가할 수 있어요! 예) /jiaslang "지아" "Discord 봇으로 채팅과 대화를 할 수 있는 AI이다." "지아야, 안녕?"
+7. /jiaping                         -  이 커맨드를 사용하면 지아가 "pong!" 메시지를 보내요.
+
 
 ## 현재 발견된 문제
 
