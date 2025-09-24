@@ -51,9 +51,9 @@ AI bot that can chat and converse on Discord
 
 ollama는 https://ollama.com/ 에서 다운로드 받을 수 있어요.
 
-### KSS기반 TTS 모델
+### Vit기반 TTS 모델
 
-Hugging Face에서 'kss ko'로 검색하면 모델이 몇 가지 나오는데 여기에서 ESPnet 예제가 있는지 확인해야해요. ESPnet 예제가 있다면 다운로드하여 압축 파일(.zip)형태로 준비해주세요.
+Hugging Face에서 'vit ko'로 검색하면 모델이 몇 가지 나오는데 여기에서 ESPnet 예제가 있는지 확인해야해요. ESPnet 예제가 있다면 다운로드하여 압축 파일(.zip)형태로 준비해주세요.
 
 ### 디스코드 봇 토큰
 
