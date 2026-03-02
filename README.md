@@ -6,7 +6,7 @@ AI bot that can chat and converse on Discord
 > [!WARNING]
 > 제작자는 Python을 주로 다루는 개발자가 아닙니다! 내부 코드 혹은 로직이 이상할 수 있으며, 그로 인한 버그가 많이 발생할 수 있습니다.
 
-[설치](https://github.com/Trace-0/Project_Jia/edit/main/README.md#설치) / [커맨드](https://github.com/Trace-0/Project_Jia/edit/main/README.md#지아의-커맨드) / [변경사항](https://github.com/Trace-0/Project_Jia/edit/main/README.md#변경-내용)
+[설치](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#설치) / [커맨드](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#지아의-커맨드) / [변경사항](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#변경-내용)
 
 
 ## 지아가 할 수 있는 것
