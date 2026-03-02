@@ -69,7 +69,7 @@ ollama는 [여기](https://ollama.com/) 에서 다운로드 받을 수 있어요
 
 ## 1-1-2. Vit기반 TTS 모델
 
-Hugging Face에서 'vit ko'로 검색하면 모델이 몇 가지 나오는데 여기에서 ESPnet 예제가 있는지 확인해야해요. ESPnet 예제가 있다면 다운로드하여 압축 파일(.zip)형태로 준비해주세요.
+[Hugging Face](https://huggingface.co/)에서 'vit ko'로 검색하면 모델이 몇 가지 나오는데 여기에서 ESPnet 예제가 있는지 확인해야해요. ESPnet 예제가 있다면 다운로드하여 압축 파일(.zip)형태로 준비해주세요.
 
 ## 1-1-3. 디스코드 봇 토큰
 
