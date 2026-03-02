@@ -32,7 +32,7 @@ AI bot that can chat and converse on Discord
 13. 말했던 내용과 LLM의 응답을 합하여 LLM이 어떤 대화를 했는지 요약하도록 해요.
 14. 요약된 내용을 Faiss 벡터에 추가하고 DB에도 저장해요.
 
-<img alt="image" src="./voice_process" />
+<img alt="image" src=".\voice_process" />
 
 (직접 설계한 구조에요. 음성 출력 이후 LLM을 이용한 요약 저장 아이디어는 음성 출력 시간과 사용자가 다시 말을 거는 시간을 활용할 수 있다는 점에서 착안되었어요.)
 
