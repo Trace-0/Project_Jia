@@ -6,7 +6,7 @@ AI bot that can chat and converse on Discord
 > [!WARNING]
 > 제작자는 Python을 주로 다루는 개발자가 아닙니다! 내부 코드 혹은 로직이 이상할 수 있으며, 그로 인한 버그가 많이 발생할 수 있습니다.
 
-[설치](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#설치) / [커맨드](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#지아의-커맨드) / [변경사항](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#변경-내용)
+[설치](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#1.-설치) / [커맨드](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#2.-지아의-커맨드) / [변경사항](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#5.-변경-내용)
 
 
 ## 지아가 할 수 있는 것
@@ -54,28 +54,28 @@ AI bot that can chat and converse on Discord
 </details>
 
 
-# 설치
+# 1. 설치
 
-### 설치하기전에 필요한 것이 있어요.
+### 1-1. 설치하기전에 필요한 것이 있어요.
 
 1. Ollama
 2. KSS기반 TTS 모델 (ESPnet에서 사용할 수 있는지 확인해야 해요.)
 3. 디스코드 봇 토큰
 4. CUDA Toolkit 12.6
 
-## Ollama
+## 1-1-1. Ollama
 
 ollama는 [여기](https://ollama.com/) 에서 다운로드 받을 수 있어요.
 
-## Vit기반 TTS 모델
+## 1-1-2. Vit기반 TTS 모델
 
 Hugging Face에서 'vit ko'로 검색하면 모델이 몇 가지 나오는데 여기에서 ESPnet 예제가 있는지 확인해야해요. ESPnet 예제가 있다면 다운로드하여 압축 파일(.zip)형태로 준비해주세요.
 
-## 디스코드 봇 토큰
+## 1-1-3. 디스코드 봇 토큰
 
 디스코드 봇 토큰은 [여기](https://discord.com/developers/applications)에서 생성할 수 있어요. 자세한 내용은 인터넷을 검색하는걸 추천드려요.
 
-## CUDA Toolkit 12.6
+## 1-1-4. CUDA Toolkit 12.6
 
 > [!important]
 > CUDA Toolkit은 반드시 12.6.x 버전으로 설치해주세요.
@@ -84,7 +84,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 
 (Embedded Python 버전이 CUDA Toolkit 12.6 기준으로 라이브러리를 다운로드하기 때문이에요.)
 
-# Embedded python 버전으로 받기
+# 1-2. Embedded python 버전으로 받기
 
 1. [여기](https://github.com/Trace-0/Project_Jia/releases/tag/v1.1.0)에서 파일을 다운로드 받아요.
 2. 받은 파일의 압축을 해제해주세요.
@@ -97,7 +97,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 
 * * *
 
-# 지아의 커맨드
+# 2. 지아의 커맨드
 
 1. `/jia` ,  `/지아`
  - 이 커맨드 뒤에 적히는 내용은 지아가 대답해줘요! 예) /지아 안녕?
@@ -127,7 +127,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
  - 이 커맨드를 사용하면 `/jiatalk` 기능을 멈춰요.
 
 
-# 현재 발견된 문제
+# 3. 현재 발견된 문제
 
 마이크가 항상 열려있는 사용자는 지연 시간 문제로 음성을 처리하지 않는 문제
 
@@ -142,7 +142,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 프로그램 종료 과정에서 불필요한 모델 언로드 과정을 거치는 문제
 
 
-# 변경 계획
+# 4. 변경 계획
 
 - [ ] TTS, STT 라이브러리를 선택할 수 있도록 수정할 예정입니다.
 - [ ] (가능하다면) LLM을 외부 API를 사용할 수 있도록 수정할 예정입니다.
@@ -151,7 +151,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 - [ ] 사운드보드를 추가할 예정입니다.
 
 
-# 변경 내용
+# 5. 변경 내용
 
 [음성]은 음성 대화에 영향을 주는 변경사항이며 [채팅]은 채팅 대화에 영향을 주는 변경사항입니다. 아무것도 적혀있지 않다면 공통으로 적용되는 변경사항입니다.
 
