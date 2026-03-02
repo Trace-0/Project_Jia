@@ -4,8 +4,8 @@ import torch
 from config.config_manager import config
 import logging
 
-model = None
-processor = None
+model: WhisperForConditionalGeneration | None = None
+processor: WhisperProcessor | None = None
 
 def reload_whisper_model():
     global model, processor
