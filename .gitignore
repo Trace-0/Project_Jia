@@ -23,6 +23,7 @@ env/
 # ── Secrets / credentials ──
 .env
 .env.*
+!.env.example
 config/settings.json
 
 # ── Runtime data & generated output ──
