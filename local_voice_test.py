@@ -106,5 +106,5 @@ async def process_audio_file(file_path: str):
 
 if __name__ == "__main__":
     # 여기에 테스트할 오디오 파일 경로를 입력하세요.
-    audio_file_to_test = "Source/output_temp/test_input.wav"
+    audio_file_to_test = "output_temp/test_input.wav"
     asyncio.run(process_audio_file(audio_file_to_test))

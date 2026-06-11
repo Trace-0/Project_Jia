@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 def generate_with_coqui_tts(text):
     timestamp = int(time.time() * 1000)
     unique_id = uuid.uuid4().hex
-    file_name = f"Source/output_temp/output_{timestamp}_{unique_id}.wav"
+    file_name = f"output_temp/output_{timestamp}_{unique_id}.wav"
 
     text = re.sub(r'[^A-Za-z0-9가-힣\s]', '', text)
 
@@ -25,7 +25,7 @@ def generate_with_coqui_tts(text):
     tts.tts_to_file(
         text=phonemes,
         file_path=file_name,
-        speaker_wav="Source/semple.wav",
+        speaker_wav="semple.wav",
         language="ko",
     )
 

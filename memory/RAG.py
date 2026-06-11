@@ -34,7 +34,7 @@ class RAG:
         self._init_metadata_db()
         self.index = self._load_index()
     def _get_guild_paths(self):
-        DATA_DIR = Path(f"Source/memory/data/{self.guild_id}")
+        DATA_DIR = Path(f"memory/data/{self.guild_id}")
         DATA_DIR.mkdir(exist_ok=True, parents=True)
         INDEX_FILE = DATA_DIR / "chat_faiss_index.faiss"
         METADATA_FILE = DATA_DIR / "chat_metadata.db"

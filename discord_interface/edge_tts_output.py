@@ -9,7 +9,7 @@ def generate_with_edge_tts(text):
     timestamp = int(time.time() * 1000)
     unique_id = uuid.uuid4().hex
     voice = "ko-KR-SunHiNeural"
-    file_name = f"Source/output_temp/output_{timestamp}_{unique_id}.wav"
+    file_name = f"output_temp/output_{timestamp}_{unique_id}.wav"
 
     communicate = edge_tts.Communicate(text, voice, rate="+10%", pitch="+8Hz")
     communicate.save_sync(file_name)

@@ -9,7 +9,7 @@ from g2pk import G2p
 def generate_with_realtime_tts(text):
     timestamp = int(time.time() * 1000)
     unique_id = uuid.uuid4().hex
-    file_name = f"Source/output_temp/output_{timestamp}_{unique_id}.wav"
+    file_name = f"output_temp/output_{timestamp}_{unique_id}.wav"
     logging.basicConfig(level=logging.INFO)
     engine = CoquiEngine(voice="female_korean", language="ko", level=logging.INFO)
     stream = TextToAudioStream(engine)
