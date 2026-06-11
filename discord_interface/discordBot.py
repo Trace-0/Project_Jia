@@ -145,6 +145,8 @@ def bot():
                 self._current_task: dict[int, asyncio.Task] = {} # 사용자별 발화 종료 감시 태스크
                 self.last_packet_time: dict[int, float] = {} # 사용자별 마지막 패킷 수신 시각 (monotonic)
                 self.timeout_sec = 0.1 # 음성 입력 후 처리를 시작하기까지의 대기 시간
+                self.interrupt_speech_sec = 0.5 # 재생 중단(barge-in) 판정에 필요한 연속 발화 시간
+                self._interrupt_fired: set[int] = set() # 이번 발화에서 이미 인터럽트를 보낸 사용자
                 self.guild = guild
                 self.loop = bot.loop
                 self.voice_channel = voice_channel
@@ -190,6 +192,37 @@ def bot():
                     self.buffers[user.id] = []
                 self.buffers[user.id].append(float_data)
 
+                # 지아가 말하는 중에 사용자의 발화가 일정 시간 이상 지속되면 재생을 중단 (barge-in)
+                if not self.only_hear and user.id not in self._interrupt_fired:
+                    buffered_sec = sum(chunk.size for chunk in self.buffers[user.id]) / 48000.0
+                    if buffered_sec >= self.interrupt_speech_sec and self._tts_audio_active():
+                        self._interrupt_fired.add(user.id)
+                        self.loop.call_soon_threadsafe(self._interrupt_playback, user)
+
+            def _tts_audio_active(self) -> bool:
+                """이 길드에서 TTS 오디오가 재생 중이거나 재생 대기 중인지 확인합니다."""
+                manager = bot.audio_stream_manager
+                if not manager:
+                    return False
+                return bool(manager.playing.get(self.guild.id)) or any(manager.streams.get(self.guild.id, {}).values())
+
+            def _interrupt_playback(self, user: discord.User):
+                """지아의 음성 재생을 중단하고, 다음 LLM 호출에서 인터럽트를 인지하도록 표시합니다."""
+                if not self._tts_audio_active():
+                    return
+                # 진행 중인 TTS 생성을 취소하고 대기 중인 오디오 큐를 비움
+                pipeline.cancel_tts_tasks(self.guild.id)
+                manager = bot.audio_stream_manager
+                if manager and self.guild.id in manager.streams:
+                    manager.streams[self.guild.id].clear()
+                voice_client = self.guild.voice_client
+                if isinstance(voice_client, voice_receive.VoiceRecvClient):
+                    voice_client.stop_playback()  # 음성 수신은 유지한 채 재생만 정지
+                elif isinstance(voice_client, discord.VoiceClient) and voice_client.is_playing():
+                    voice_client.stop()
+                pipeline.mark_playback_interrupted(self.guild.id)
+                logger.info(f"[Discord:Interrupt] [{user.name}]의 발화가 이어져서 재생을 중단했어요.")
+
             async def packet_timeout(self, user: discord.User):
                 try:
                     # 마지막 패킷 이후 timeout_sec 동안 새 패킷이 없을 때까지 대기
@@ -205,6 +238,7 @@ def bot():
             async def send_vad_and_whisper(self, user: discord.User):
                 # 사용자의 버퍼를 가져옴
                 user_buffer = self.buffers.pop(user.id, [])
+                self._interrupt_fired.discard(user.id)  # 다음 발화에서 다시 인터럽트 판정 가능하게 초기화
                 if not user_buffer:
                     return
 
@@ -222,6 +256,7 @@ def bot():
                         task.cancel()
                 self._current_task.clear()
                 self.buffers.clear()
+                self._interrupt_fired.clear()
                 # 다른 곳에서 LLM을 쓰는 중이면 언로드하지 않음 (오디오 수신 스레드에서 호출되므로 동기 호출 가능)
                 if not llm_still_in_use(exclude_guild_id=self.guild.id):
                     unload_ollama_model(config.llmModel)
@@ -274,6 +309,8 @@ def bot():
             if ctx.voice_client:
                 # RAG 인덱스 저장
                 get_rag_instance(ctx.guild.id).save_all()
+                # 처리 대기 중인 발화 정리
+                pipeline.clear_pending_utterances(ctx.guild.id)
                 # 오디오 스트림 정리
                 if bot.audio_stream_manager and ctx.guild.id in bot.audio_stream_manager.streams:
                     del bot.audio_stream_manager.streams[ctx.guild.id]
@@ -471,6 +508,8 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 정지 실패 (지아가 음성 채널에 접속하지 않음)")
                 return
             try:
+                # 아직 응답 생성이 시작되지 않은 대기 발화를 비워 새 응답이 시작되지 않게 함
+                pipeline.clear_pending_utterances(ctx.guild.id)
                 # 진행 중인 TTS 생성에 취소 신호를 먼저 보내 뒷문장이 새로 큐에 들어오지 않게 함
                 cancelled = pipeline.cancel_tts_tasks(ctx.guild.id)
                 # 대기 중인 오디오 큐를 비워서 다음 항목이 이어 재생되지 않게 함

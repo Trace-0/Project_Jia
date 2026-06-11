@@ -86,7 +86,7 @@ async def process_audio_file(file_path: str):
 
     # 5. LLM 응답 생성 및 TTS/재생
     first_sentence_generated = False
-    async for sentence in astream_call_response(USER, GUILD_ID, text):
+    async for sentence in astream_call_response(GUILD_ID, [(USER, text)]):
         if sentence:
             if not first_sentence_generated:
                 current_time = time.time()

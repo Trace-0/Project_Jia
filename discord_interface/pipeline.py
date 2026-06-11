@@ -156,6 +156,36 @@ def _tts_worker(sentence_queue: queue.Queue, guild: int, stream_task_id: str, ca
             break
         tts_and_play(sentence, guild, stream_task_id)
 
+# === 다인 대화 배칭 ===
+# 발화를 길드별로 모아두고, 길드당 하나의 대화 워커가 배치 단위로 LLM 응답을 생성합니다.
+# 지아가 응답을 생성/재생하는 동안 들어온 발화는 다음 배치로 묶여 한 번의 호출로 처리됩니다.
+# (아래 자료구조는 모두 봇 이벤트 루프에서만 접근하므로 별도 잠금이 필요 없습니다)
+_pending_utterances: dict[int, list[tuple[str, str]]] = {}
+_convo_tasks: dict[int, asyncio.Task] = {}
+
+# 지아의 음성 재생이 사용자 발화로 중단(barge-in)된 길드 표시.
+# 다음 LLM 호출에 "직전 응답이 끊겼다"는 안내를 함께 전달한 뒤 해제됩니다.
+_interrupted_guilds: set[int] = set()
+
+def mark_playback_interrupted(guild: int):
+    """재생이 사용자 발화로 중단되었음을 기록합니다."""
+    _interrupted_guilds.add(guild)
+
+def _pop_playback_interrupted(guild: int) -> bool:
+    if guild in _interrupted_guilds:
+        _interrupted_guilds.discard(guild)
+        return True
+    return False
+
+def clear_pending_utterances(guild: int) -> int:
+    """아직 처리되지 않은 대기 발화와 인터럽트 표시를 비우고, 비운 발화 수를 반환합니다. (/jiastop, /jialeave용)"""
+    _interrupted_guilds.discard(guild)
+    pending = _pending_utterances.get(guild)
+    count = len(pending) if pending else 0
+    if pending:
+        pending.clear()
+    return count
+
 async def process_audio(user, guild, audio_data_48k, only_hear: bool = False, textchan_id: int = None):
     try:
         # 블로킹 작업(리샘플링/VAD/Whisper)이 봇 이벤트 루프를 멈추지 않도록 스레드에서 실행
@@ -171,25 +201,60 @@ async def process_audio(user, guild, audio_data_48k, only_hear: bool = False, te
                 logging.warning(f"[Pipeline] 텍스트 채널이 지정되지 않아 변환 결과를 전달할 곳이 없습니다.")
             return
 
-        # 같은 응답의 문장들이 순서대로 재생되도록 단일 워커가 순서대로 TTS 생성
-        stream_task_id = str(uuid.uuid4())
-        sentence_queue: queue.Queue = queue.Queue()
-        cancel_event = threading.Event()
-        _register_tts_cancel(guild, cancel_event, sentence_queue)
-        worker = threading.Thread(target=_tts_worker, args=(sentence_queue, guild, stream_task_id, cancel_event), daemon=True)
-        worker.start()
-        try:
-            async for sentence in astream_call_response(user, guild, text):
-                # 취소돼도 응답 생성은 끝까지 진행해 대화 기록은 보존하고, 재생만 건너뜀
-                if sentence and not cancel_event.is_set():
-                    sentence_queue.put(sentence)
-        except Exception as e:
-            logging.error(f"[Pipeline] TTS 및 재생 중 오류 발생: {e}")
-        finally:
-            sentence_queue.put(None)  # 워커 종료 신호
-            _unregister_tts_cancel(guild, cancel_event, sentence_queue)
+        # 발화를 길드별 대기열에 쌓고, 대화 워커가 없으면 새로 시작
+        _pending_utterances.setdefault(guild, []).append((user, text))
+        task = _convo_tasks.get(guild)
+        if task is None or task.done():
+            _convo_tasks[guild] = asyncio.create_task(_conversation_worker(guild))
     except Exception as e:
         logging.error(f"[Pipeline] 오디오 처리 중 오류 발생: {e}")
+
+async def _conversation_worker(guild: int):
+    """모인 발화를 배치 단위로 처리하는 길드별 단일 워커 (LLM 호출/재생 직렬화)"""
+    try:
+        while True:
+            utterances = _pending_utterances.get(guild)
+            if not utterances:
+                break
+            _pending_utterances[guild] = []
+            await _respond_to_batch(guild, utterances)
+            # 재생이 끝날 때까지 기다리는 동안 들어온 발화는 다음 배치로 묶임
+            await _wait_for_playback(guild)
+    except Exception as e:
+        logging.error(f"[Pipeline] 대화 워커 처리 중 오류 발생: {e}")
+
+async def _respond_to_batch(guild: int, utterances: list[tuple[str, str]]):
+    """발화 배치 하나에 대해 LLM 응답을 스트리밍하며 TTS 재생 큐에 추가합니다."""
+    # 직전 응답 재생이 사용자 발화로 중단됐다면 이번 호출에서 LLM에 알림
+    interrupted = _pop_playback_interrupted(guild)
+    # 같은 응답의 문장들이 순서대로 재생되도록 단일 워커가 순서대로 TTS 생성
+    stream_task_id = str(uuid.uuid4())
+    sentence_queue: queue.Queue = queue.Queue()
+    cancel_event = threading.Event()
+    _register_tts_cancel(guild, cancel_event, sentence_queue)
+    worker = threading.Thread(target=_tts_worker, args=(sentence_queue, guild, stream_task_id, cancel_event), daemon=True)
+    worker.start()
+    try:
+        async for sentence in astream_call_response(guild, utterances, interrupted=interrupted):
+            # 취소돼도 응답 생성은 끝까지 진행해 대화 기록은 보존하고, 재생만 건너뜀
+            if sentence and not cancel_event.is_set():
+                sentence_queue.put(sentence)
+    except Exception as e:
+        logging.error(f"[Pipeline] TTS 및 재생 중 오류 발생: {e}")
+    finally:
+        sentence_queue.put(None)  # 워커 종료 신호
+        # 이번 응답의 TTS 생성이 모두 끝날 때까지 대기 (다음 배치 응답과 재생 순서가 섞이지 않게)
+        # 생성이 끝나기 전까지는 /jiastop 취소 신호를 받을 수 있도록 등록을 유지
+        await asyncio.to_thread(worker.join)
+        _unregister_tts_cancel(guild, cancel_event, sentence_queue)
+
+async def _wait_for_playback(guild: int):
+    """이 길드의 오디오 재생이 모두 끝날 때까지 대기합니다."""
+    manager = bot_instance.audio_stream_manager if bot_instance else None
+    if not manager:
+        return
+    while manager.playing.get(guild) or any(manager.streams.get(guild, {}).values()):
+        await asyncio.sleep(0.2)
 
 def run_audio_task(user, guild, audio_data_48k, only_hear: bool = False, textchan_id: int = None):
     if bot_instance and bot_instance.loop and not bot_instance.loop.is_closed():

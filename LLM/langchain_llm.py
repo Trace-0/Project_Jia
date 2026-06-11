@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-llm = ChatOllama(model=config.llmModel, keep_alive=-1)
+llm = ChatOllama(model=config.llmModel, keep_alive=-1, num_ctx=config.llmNumCtx)
 checkpointer = InMemorySaver()
 memory_managers = {}
 
@@ -70,16 +70,32 @@ sys_prompt = _build_sys_prompt()
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
+def _approx_token_count(messages) -> int:
+    """메시지 목록의 토큰 수를 '문자 수 ≈ 토큰 수'로 보수적으로 어림합니다.
+
+    한국어는 대체로 1글자가 1토큰 이상으로 쪼개지지 않으므로 과대 추정이 되어,
+    실제 토큰이 컨텍스트 윈도우를 넘지 않는 안전한 방향으로 동작합니다.
+    """
+    total = 0
+    for m in messages:
+        content = m.content
+        total += len(content) if isinstance(content, str) else len(str(content))
+    return total
+
 def pre_agent_hook(state):
+    """에이전트가 LLM을 호출하기 전에 대화 기록이 컨텍스트 윈도우를 넘지 않도록 자릅니다.
+
+    시스템 프롬프트와 응답 생성 여유분(2048)을 제외한 만큼만 기록을 유지하고,
+    한도를 넘으면 오래된 메시지부터 제거합니다.
     """
-    에이전트가 LLM을 호출하기 전에 메시지를 3턴(6개 메시지)으로 자릅니다.
-    """
+    budget = max(config.llmNumCtx - len(sys_prompt) - 2048, 2048)
     trimmed_messages = trim_messages(
         state["messages"],
-        max_tokens=6, # 3턴 = 사용자 메시지 3개 + AI 응답 3개
+        max_tokens=budget,
         strategy="last",
-        token_counter=len, # 메시지 개수로 계산
+        token_counter=_approx_token_count,
         include_system=True,
+        start_on="human",  # 잘린 기록이 사용자 메시지부터 시작하도록 (턴 중간 절단 방지)
     )
     return {"messages": trimmed_messages}
 
@@ -97,7 +113,7 @@ def reload_llm():
     checkpointer는 유지되어 대화 기록은 보존됩니다.
     """
     global llm, sys_prompt
-    llm = ChatOllama(model=config.llmModel, keep_alive=-1)
+    llm = ChatOllama(model=config.llmModel, keep_alive=-1, num_ctx=config.llmNumCtx)
     sys_prompt = _build_sys_prompt()
     callagents.clear()
     textagents.clear()
@@ -161,14 +177,40 @@ def generate_response(user: str, guild: int, prompt: str) -> str:
             return final_response
     return ""
 
-async def astream_call_response(user: str, guild: int, prompt: str):
-    """LLM 응답을 스트리밍하고 문장 단위로 yield하는 비동기 제너레이터"""
+# 음성 대화에서 LLM이 "응답하지 않는 것이 자연스럽다"고 판단했을 때 출력하는 마커
+VOICE_PASS_MARKER = "[PASS]"
+
+def _build_voice_input(utterances: list[tuple[str, str]], interrupted: bool = False) -> str:
+    """발화 묶음을 화자 라벨이 붙은 다인 대화 입력으로 구성합니다."""
+    lines = "\n".join(f"{speaker}: {text}" for speaker, text in utterances)
+    notice = ""
+    if interrupted:
+        notice = (
+            "(참고: 너의 직전 응답은 음성으로 재생되던 도중 사용자가 말을 시작해서 중단됐어. "
+            "사용자들은 그 응답을 끝까지 듣지 못했을 수 있어. 이 점을 감안해서 자연스럽게 대화를 이어가줘.)\n\n"
+        )
+    return (
+        f"{notice}다음은 음성 채널에서 방금 오간 발화야:\n"
+        f"{lines}\n\n"
+        "여러 사람이 함께 대화하고 있을 수 있어. 너에게 하는 말이거나 네가 자연스럽게 끼어들 만한 상황이라면 대화 흐름에 맞는 응답을 생성해줘.\n"
+        f"사람들끼리 대화하는 중이라 네가 응답하지 않는 것이 자연스럽다면, 다른 말은 하지 말고 정확히 {VOICE_PASS_MARKER} 라고만 답해줘."
+    )
+
+async def astream_call_response(guild: int, utterances: list[tuple[str, str]], interrupted: bool = False):
+    """발화 묶음에 대한 LLM 응답을 스트리밍하고 문장 단위로 yield하는 비동기 제너레이터
+
+    utterances: (화자 이름, 발화 텍스트) 목록. 여러 화자의 발화를 한 번에 전달할 수 있습니다.
+    interrupted: 직전 응답 재생이 사용자 발화로 중단(인터럽트)되었음을 LLM에 알립니다.
+    LLM이 응답할 상황이 아니라고 판단하면(응답이 [PASS]로 시작) 아무것도 yield하지 않습니다.
+    """
     agent = get_agent_for_guild(guild_id=guild, is_text=False)
-    input_content = f"{user}이(가) '{prompt}'라고 말했어.\n\n너가 대답할 수 있는 상황이라면 응답을 생성해줘."
+    input_content = _build_voice_input(utterances, interrupted=interrupted)
     config = {"configurable": {"thread_id": f"{guild}"}}
-    
+
     full_response = ""
     buffer = ""
+    head_checked = False  # 응답 머리가 PASS 마커인지 판별하기 전까지 yield 보류
+    passed = False
     async for event in agent.astream_events({"messages": [HumanMessage(content=input_content)]}, config, version="v1"):
         kind = event["event"]
         if kind == "on_chat_model_stream":
@@ -176,7 +218,24 @@ async def astream_call_response(user: str, guild: int, prompt: str):
             if isinstance(chunk, AIMessageChunk) and chunk.content:
                 content = chunk.content
                 buffer += content
-                
+
+                # 스트림 자체는 끝까지 소비해서 대화 기록(checkpointer)에는 남김
+                if passed:
+                    continue
+
+                if not head_checked:
+                    head = buffer.lstrip().upper()
+                    if len(head) < len(VOICE_PASS_MARKER):
+                        if VOICE_PASS_MARKER.startswith(head):
+                            continue  # 아직 마커의 앞부분일 수 있으니 더 모음
+                        head_checked = True
+                    elif head.startswith(VOICE_PASS_MARKER):
+                        passed = True
+                        logging.info(f"[LLM:Call] 응답이 필요 없는 상황으로 판단해 침묵해요. (guild={guild})")
+                        continue
+                    else:
+                        head_checked = True
+
                 while True:
                     match = re.search(r'([.,!?])', buffer)
                     if match:
@@ -188,10 +247,12 @@ async def astream_call_response(user: str, guild: int, prompt: str):
                             full_response += sentence.strip() + " "
                     else:
                         break
-    if buffer:
+    if buffer and not passed:
         yield buffer.strip()
         full_response += buffer.strip()
-    
-    if full_response:
-        thread = threading.Thread(target=calculate_and_save_importance, args=(user, guild, prompt, full_response))
+
+    if full_response and not passed:
+        speakers = ", ".join(dict.fromkeys(speaker for speaker, _ in utterances))
+        transcript = "\n".join(f"{speaker}: {text}" for speaker, text in utterances)
+        thread = threading.Thread(target=calculate_and_save_importance, args=(speakers, guild, transcript, full_response))
         thread.start()
