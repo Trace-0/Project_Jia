@@ -140,7 +140,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[whisper]` `compute_type` | `float16` | Whisper 연산 정밀도 | 모델 자동 재로딩 |
 | `[whisper]` `beam_size` | `5` | STT beam size (클수록 정확하지만 느려요) | 즉시 |
 | `[tts]` `model` | (없음) | TTS(음성 합성) 모델 경로 | 모델 자동 재로딩 |
-| `[llm]` `model` | `gpt-oss:20b` | Ollama LLM 모델 | 모델 자동 재로딩 |
+| `[llm]` `model` | `gemma4:latest` | Ollama LLM 모델 | 모델 자동 재로딩 |
 | `[llm]` `num_ctx` | `16384` | LLM 컨텍스트 윈도우 크기(토큰) | 모델 자동 재로딩 |
 | `[llm]` `system_prompt` | (내장) | 지아의 성격/말투를 정의하는 시스템 프롬프트 | 모델 자동 재로딩 |
 | `[llm]` `response_reserve_tokens` | `2048` | 컨텍스트 윈도우에서 응답 생성용으로 남겨둘 토큰 여유분 | 즉시 |
