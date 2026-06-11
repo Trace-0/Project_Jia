@@ -302,6 +302,7 @@ threadpoolctl==3.6.0
 tiktoken==0.11.0
 tokenizers==0.22.2
 tomli==2.2.1
+tomlkit==0.15.0
 torch==2.7.1+cu128
 torch-complex==0.4.4
 torchaudio==2.7.1+cu128

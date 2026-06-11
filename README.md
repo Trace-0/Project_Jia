@@ -86,7 +86,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 1. [여기](https://github.com/Trace-0/Project_Jia/releases/tag/v1.1.2)에서 파일을 다운로드 받아요.
 2. 받은 파일의 압축을 해제해주세요.
 3. TTS 모델을 파일 안으로 옮겨주세요.
-4. '.env' 파일을 열고 주석에 적힌대로 진행해주세요.
+4. 'settings.toml' 파일을 열고 봇 토큰 등 설정을 입력해주세요. (파일이 없다면 한 번 실행하면 자동으로 생성돼요.)
 5. 'RUN_FIRST.bat' 파일을 실행해주세요.
 6. 'RUN_SECOND.bat' 파일을 실행해주세요. 관리자 권한을 요구하는 창이 나온다면 '예'를 선택해주세요. (ESPnet, pywin32의 문제로 TTS모델이 변경되면 관리자 권한이 필요합니다.)
 7. (다음부터는 'start.bat' 파일로 실행할 수 있어요. 하지만, TTS 모델이 바뀐다면 'RUN_SECOND.bat' 파일로 한 번은 실행해야해요.)
@@ -102,7 +102,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `/jiajoin` | 지아가 통화방에 들어와요! |
 | `/jialeave` | 지아가 통화방에서 나가요. :( |
 | `/jiareload` | 지아의 설정을 다시 불러와요. |
-| `/jiasavesetting` | 현재 지아의 설정을 `.env`에 저장해요. |
+| `/jiasavesetting` | 현재 지아의 설정을 `settings.toml`에 저장해요. |
 | `/jiaunloadmodel` | 현재 로드된 LLM 모델을 언로드해요. |
 | `/jiaping` | 지아가 "pong!" 메시지를 보내요. |
 | `/jiasay [문장]` | 지아가 [문장] 부분을 읽어줘요. |
@@ -114,44 +114,49 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `/jiarestart` | 지아가 재시작돼요. 재시작이 필요한 설정을 바꿨을 때 사용해요. |
 
 
-# 2-1. 설정(.env) 항목
+# 2-1. 설정(settings.toml) 항목
 
-지아의 세부 동작은 모두 프로젝트 루트의 `.env` 파일에서 `JIA_` 접두사 키로 조절할 수 있어요.
+지아의 모든 설정(봇 토큰 포함)은 프로젝트 루트의 `settings.toml` 파일에서 조절할 수 있어요. 파일이 없다면 최초 실행 때 기본값으로 자동 생성되고, 항목마다 설명 주석이 함께 적혀 있어요.
 
-`.env` 파일을 수정하고 저장하면 지아가 자동으로 변경을 감지해서 **재시작 없이** 반영해요. 모델 관련 설정이 바뀌면 해당 모델만 자동으로 다시 로드돼요. (수동으로 다시 불러오고 싶다면 `/jiareload`를 사용할 수 있어요.)
+`.env` 파일은 LangSmith 추적 같은 개발용 API 키를 쓸 때만 필요해요. 일반 사용자는 신경 쓰지 않아도 괜찮아요. (기존에 `.env`로 설정을 관리하던 경우, 실행하면 `JIA_` 설정값이 자동으로 `settings.toml`로 옮겨지고 원본은 `.env.bak`에 백업돼요.)
+
+`settings.toml`을 수정하고 저장하면 지아가 자동으로 변경을 감지해서 **재시작 없이** 반영해요. 모델 관련 설정이 바뀌면 해당 모델만 자동으로 다시 로드돼요. (수동으로 다시 불러오고 싶다면 `/jiareload`를 사용할 수 있어요.)
 
 | 키 | 기본값 | 설명 | 반영 방식 |
 |---|---|---|---|
-| `JIA_JOIN_REPLY` | `true` | 음성 채널 접속 시 안내 메시지 전송 여부 | 즉시 |
-| `JIA_LEAVE_REPLY` | `true` | 음성 채널 퇴장 시 안내 메시지 전송 여부 | 즉시 |
-| `JIA_VOICE_TIMEOUT_SEC` | `0.1` | 마지막 음성 패킷 이후 이 시간 동안 패킷이 없으면 발화가 끝났다고 판단해요 | 즉시 |
-| `JIA_VOICE_INTERRUPT_SPEECH_SEC` | `0.5` | 지아가 말하는 중 사용자의 발화가 이 시간 이상 이어지면 재생을 중단해요(barge-in) | 즉시 |
-| `JIA_VAD_THRESHOLD` | `0.7` | 발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감) | 즉시 |
-| `JIA_VAD_MIN_SPEECH_MS` | `150` | 이보다 짧은 발화 구간은 무시해요 | 즉시 |
-| `JIA_VAD_MIN_SILENCE_MS` | `1000` | 발화 구간 분리에 필요한 최소 무음 시간 | 즉시 |
-| `JIA_VAD_MAX_SPEECH_SEC` | `30` | 발화 구간 하나의 최대 길이 | 즉시 |
-| `JIA_VAD_PADDING_MS` | `200` | 발화 구간 시작 지점 앞에 붙이는 여유 시간 | 즉시 |
-| `JIA_WHISPER_MODEL` | `openai/whisper-large-v3-turbo` | STT(음성 인식) 모델 | 모델 자동 재로딩 |
-| `JIA_WHISPER_DEVICE` | `cuda` | Whisper 실행 디바이스 | 모델 자동 재로딩 |
-| `JIA_WHISPER_COMPUTE_TYPE` | `float16` | Whisper 연산 정밀도 | 모델 자동 재로딩 |
-| `JIA_WHISPER_BEAM_SIZE` | `5` | STT beam size (클수록 정확하지만 느려요) | 즉시 |
-| `JIA_TTS_MODEL` | (없음) | TTS(음성 합성) 모델 경로 | 모델 자동 재로딩 |
-| `JIA_LLM_MODEL` | `gpt-oss:20b` | Ollama LLM 모델 | 모델 자동 재로딩 |
-| `JIA_LLM_NUM_CTX` | `16384` | LLM 컨텍스트 윈도우 크기(토큰) | 모델 자동 재로딩 |
-| `JIA_LLM_SYSTEM_PROMPT` | (내장) | 지아의 성격/말투를 정의하는 시스템 프롬프트 | 모델 자동 재로딩 |
-| `JIA_LLM_RESPONSE_RESERVE_TOKENS` | `2048` | 컨텍스트 윈도우에서 응답 생성용으로 남겨둘 토큰 여유분 | 즉시 |
-| `JIA_FAISS_THRESHOLD` | `0.5` | 기억 검색 결과로 인정할 최소 유사도 점수 | 즉시 |
-| `JIA_RAG_TOP_K` | `3` | 기억 검색 시 가져올 최대 개수 | 즉시 |
-| `JIA_RAG_FORGETTABLE_IMPORTANCE` | `0.8` | 이 중요도 미만은 잊어버릴 수 있는 기억으로 저장해요 | 즉시 |
-| `JIA_RAG_WARN_IMPORTANCE` | `0.5` | 이 중요도 미만의 기억은 부정확할 수 있다는 경고와 함께 사용해요 | 즉시 |
-| `JIA_RAG_SAVE_IMPORTANCE_MIN` | `0.1` | 이 중요도 이하의 대화는 기억으로 저장하지 않아요 | 즉시 |
-| `JIA_EMBEDDING_MODEL` | `dragonkue/BGE-m3-ko` | 기억 검색용 임베딩 모델 | 재시작 필요 |
-| `JIA_ENV_WATCH_INTERVAL_SEC` | `2.0` | `.env` 변경 감지 주기(초) | 재시작 필요 |
-| `JIA_BOT_TOKEN` | (없음) | 디스코드 봇 토큰 | 재시작 필요 |
-| `JIA_DEBUG_TEXT_CHANNEL` | (없음) | 로그를 보낼 디버그 텍스트 채널 ID | 재시작 필요 |
+| `[bot]` `token` | (없음) | 디스코드 봇 토큰 | 재시작 필요 |
+| `[bot]` `debug_text_channel` | `0` | 로그를 보낼 디버그 텍스트 채널 ID (0이면 사용 안 함) | 재시작 필요 |
+| `[bot]` `join_reply` | `true` | 음성 채널 접속 시 안내 메시지 전송 여부 | 즉시 |
+| `[bot]` `leave_reply` | `true` | 음성 채널 퇴장 시 안내 메시지 전송 여부 | 즉시 |
+| `[voice]` `timeout_sec` | `0.1` | 마지막 음성 패킷 이후 이 시간 동안 패킷이 없으면 발화가 끝났다고 판단해요 | 즉시 |
+| `[voice]` `interrupt_speech_sec` | `0.5` | 지아가 말하는 중 사용자의 발화가 이 시간 이상 이어지면 재생을 중단해요(barge-in) | 즉시 |
+| `[vad]` `threshold` | `0.7` | 발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감) | 즉시 |
+| `[vad]` `min_speech_ms` | `150` | 이보다 짧은 발화 구간은 무시해요 | 즉시 |
+| `[vad]` `min_silence_ms` | `1000` | 발화 구간 분리에 필요한 최소 무음 시간 | 즉시 |
+| `[vad]` `max_speech_sec` | `30` | 발화 구간 하나의 최대 길이 | 즉시 |
+| `[vad]` `padding_ms` | `200` | 발화 구간 시작 지점 앞에 붙이는 여유 시간 | 즉시 |
+| `[whisper]` `model` | `openai/whisper-large-v3-turbo` | STT(음성 인식) 모델 | 모델 자동 재로딩 |
+| `[whisper]` `device` | `cuda` | Whisper 실행 디바이스 | 모델 자동 재로딩 |
+| `[whisper]` `compute_type` | `float16` | Whisper 연산 정밀도 | 모델 자동 재로딩 |
+| `[whisper]` `beam_size` | `5` | STT beam size (클수록 정확하지만 느려요) | 즉시 |
+| `[tts]` `model` | (없음) | TTS(음성 합성) 모델 경로 | 모델 자동 재로딩 |
+| `[llm]` `model` | `gpt-oss:20b` | Ollama LLM 모델 | 모델 자동 재로딩 |
+| `[llm]` `num_ctx` | `16384` | LLM 컨텍스트 윈도우 크기(토큰) | 모델 자동 재로딩 |
+| `[llm]` `system_prompt` | (내장) | 지아의 성격/말투를 정의하는 시스템 프롬프트 | 모델 자동 재로딩 |
+| `[llm]` `response_reserve_tokens` | `2048` | 컨텍스트 윈도우에서 응답 생성용으로 남겨둘 토큰 여유분 | 즉시 |
+| `[rag]` `embedding_model` | `dragonkue/BGE-m3-ko` | 기억 검색용 임베딩 모델 | 재시작 필요 |
+| `[rag]` `faiss_threshold` | `0.5` | 기억 검색 결과로 인정할 최소 유사도 점수 | 즉시 |
+| `[rag]` `top_k` | `3` | 기억 검색 시 가져올 최대 개수 | 즉시 |
+| `[rag]` `forgettable_importance` | `0.8` | 이 중요도 미만은 잊어버릴 수 있는 기억으로 저장해요 | 즉시 |
+| `[rag]` `warn_importance` | `0.5` | 이 중요도 미만의 기억은 부정확할 수 있다는 경고와 함께 사용해요 | 즉시 |
+| `[rag]` `save_importance_min` | `0.1` | 이 중요도 이하의 대화는 기억으로 저장하지 않아요 | 즉시 |
+| `[settings]` `watch_interval_sec` | `2.0` | `settings.toml` 변경 감지 주기(초) | 재시작 필요 |
 
 > [!tip]
-> 프로그램을 업데이트해서 새 설정 항목이 생기면, 다음 실행 때 기본값이 `.env`에 자동으로 채워져요. `JIA_` 접두사가 없는 키(API 키 등)는 그대로 보존돼요.
+> 프로그램을 업데이트해서 새 설정 항목이 생기면, 다음 실행 때 기본값이 `settings.toml`에 자동으로 채워져요. 직접 적어둔 주석과 키 순서는 그대로 보존돼요.
+
+> [!caution]
+> `settings.toml`에는 디스코드 봇 토큰이 들어 있으니 다른 사람과 공유하지 마세요. (git에는 올라가지 않도록 `.gitignore`에 등록되어 있어요.)
 
 
 # 3. 현재 발견된 문제
@@ -191,12 +196,13 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 4. [음성] 사람들끼리 대화하는 중이라 응답할 상황이 아니라고 LLM이 판단하면 지아가 말을 하지 않습니다.
 5. [음성] 지아의 음성 재생 중에 사용자의 발화가 0.5초 이상 지속되면 재생을 중단합니다. 중단되었다는 사실은 다음 LLM 호출에 함께 전달되어 지아가 중단을 인지하고 자연스럽게 대화를 이어갑니다.
 6. 대화 기억 구조를 최대 3쌍 제한에서 컨텍스트 윈도우 기반 유지로 변경했습니다. 이제 컨텍스트 윈도우 예산 안에서 기록을 최대한 유지하고, 한도를 넘으면 오래된 메시지부터 제거합니다.
-7. LLM 컨텍스트 윈도우 크기를 설정 항목으로 추가했습니다. (.env의 `JIA_LLM_NUM_CTX`, 기본값 16384) GPU 메모리에 여유가 있다면 이 값을 올려 더 많은 대화를 기억하게 할 수 있습니다.
+7. LLM 컨텍스트 윈도우 크기를 설정 항목으로 추가했습니다. (settings.toml의 `[llm] num_ctx`, 기본값 16384) GPU 메모리에 여유가 있다면 이 값을 올려 더 많은 대화를 기억하게 할 수 있습니다.
 8. [음성] `/jiastop`, `/jialeave`가 아직 응답 생성이 시작되지 않은 대기 발화도 함께 정리하도록 변경했습니다.
-9. 코드 곳곳에 하드코딩되어 있던 세부 튜닝값을 모두 `.env` 설정 항목으로 옮겼습니다. (발화 종료 대기 시간, barge-in 판정 시간, VAD 파라미터, Whisper 디바이스/빔 크기, RAG 중요도 임계값/검색 개수, 임베딩 모델, LLM 응답 여유 토큰 등. 전체 목록은 [2-1. 설정(.env) 항목](#2-1-설정env-항목) 참고)
-10. `.env` 파일 변경을 자동으로 감지해 재시작 없이 설정을 반영합니다. 모델 관련 설정이 바뀌면 해당 모델만 자동으로 다시 로드되고, 이전 LLM 모델은 Ollama 메모리에서 내려갑니다.
-11. `/jiarestart` 명령어를 추가했습니다. 재시작이 필요한 설정(`JIA_EMBEDDING_MODEL` 등)을 바꿨을 때 사용할 수 있습니다.
-12. 프로그램 업데이트로 새 설정 항목이 추가되면 다음 실행 때 기본값이 `.env`에 자동으로 채워집니다.
+9. 설정 파일을 `.env`에서 `settings.toml`로 변경했습니다. 지아의 모든 설정(봇 토큰 포함)은 항목별 설명 주석과 함께 `settings.toml`에서 관리되며, `.env`는 LangSmith 같은 개발용 키 전용이 되어 일반 사용자는 더 이상 다룰 필요가 없습니다. 기존 `.env`의 `JIA_` 설정값은 최초 실행 시 자동으로 `settings.toml`로 옮겨집니다. (원본은 `.env.bak`에 백업)
+10. 코드 곳곳에 하드코딩되어 있던 세부 튜닝값을 모두 설정 항목으로 옮겼습니다. (발화 종료 대기 시간, barge-in 판정 시간, VAD 파라미터, Whisper 디바이스/빔 크기, RAG 중요도 임계값/검색 개수, 임베딩 모델, LLM 응답 여유 토큰 등. 전체 목록은 [2-1. 설정(settings.toml) 항목](#2-1-설정settingstoml-항목) 참고)
+11. `settings.toml` 파일 변경을 자동으로 감지해 재시작 없이 설정을 반영합니다. 모델 관련 설정이 바뀌면 해당 모델만 자동으로 다시 로드되고, 이전 LLM 모델은 Ollama 메모리에서 내려갑니다.
+12. `/jiarestart` 명령어를 추가했습니다. 재시작이 필요한 설정(`[rag] embedding_model` 등)을 바꿨을 때 사용할 수 있습니다.
+13. 프로그램 업데이트로 새 설정 항목이 추가되면 다음 실행 때 기본값이 `settings.toml`에 자동으로 채워집니다.
 
 ## 1.1.2
 

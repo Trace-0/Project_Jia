@@ -128,7 +128,7 @@ def bot():
             return False
 
         def on_config_changed(changed: dict):
-            """.env 자동 리로드 후 호출되는 후처리 콜백. (config 워처 스레드에서 실행)
+            """settings.toml 자동 리로드 후 호출되는 후처리 콜백. (config 워처 스레드에서 실행)
 
             단순 값 변경은 reload만으로 즉시 반영되지만, 모델 관련 설정은
             바뀐 항목에 해당하는 모델만 골라서 다시 로드합니다.
@@ -165,7 +165,7 @@ def bot():
                 self._current_task: dict[int, asyncio.Task] = {} # 사용자별 발화 종료 감시 태스크
                 self.last_packet_time: dict[int, float] = {} # 사용자별 마지막 패킷 수신 시각 (monotonic)
                 # 발화 종료 대기 시간과 barge-in 판정 시간은 config(voice_timeout_sec, voice_interrupt_speech_sec)에서
-                # 사용 시점에 읽으므로 .env 수정만으로 즉시 반영됩니다.
+                # 사용 시점에 읽으므로 settings.toml 수정만으로 즉시 반영됩니다.
                 self._interrupt_fired: set[int] = set() # 이번 발화에서 이미 인터럽트를 보낸 사용자
                 self.guild = guild
                 self.loop = bot.loop
@@ -644,7 +644,7 @@ def bot():
             if message.guild.id in bot.autotalk_channels and message.channel.id in bot.autotalk_channels[message.guild.id] and not message.author.bot:
                 await jia(ctx, prompt=message.content)
 
-        # .env 파일 변경을 감시해 재시작 없이 설정을 자동 반영 (모델 관련 설정은 해당 모델만 재로딩)
+        # settings.toml 파일 변경을 감시해 재시작 없이 설정을 자동 반영 (모델 관련 설정은 해당 모델만 재로딩)
         config.start_auto_reload(on_change=on_config_changed)
         bot.run(config.bot_token)
     except Exception as e:

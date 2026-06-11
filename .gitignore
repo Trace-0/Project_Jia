@@ -23,7 +23,7 @@ env/
 # ── Secrets / credentials ──
 .env
 .env.*
-!.env.example
+settings.toml
 config/settings.json
 
 # ── Runtime data & generated output ──
