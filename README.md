@@ -118,7 +118,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 
 지아의 모든 설정(봇 토큰 포함)은 프로젝트 루트의 `settings.toml` 파일에서 조절할 수 있어요. 파일이 없다면 최초 실행 때 기본값으로 자동 생성되고, 항목마다 설명 주석이 함께 적혀 있어요.
 
-`.env` 파일은 LangSmith 추적 같은 개발용 API 키를 쓸 때만 필요해요. 일반 사용자는 신경 쓰지 않아도 괜찮아요. (기존에 `.env`로 설정을 관리하던 경우, 실행하면 `JIA_` 설정값이 자동으로 `settings.toml`로 옮겨지고 원본은 `.env.bak`에 백업돼요.)
+기존에 `.env`로 설정을 관리하던 경우, 실행하면 `JIA_` 설정값이 자동으로 `settings.toml`로 옮겨지고 원본은 `.env.bak`에 백업돼요.
 
 `settings.toml`을 수정하고 저장하면 지아가 자동으로 변경을 감지해서 **재시작 없이** 반영해요. 모델 관련 설정이 바뀌면 해당 모델만 자동으로 다시 로드돼요. (수동으로 다시 불러오고 싶다면 `/jiareload`를 사용할 수 있어요.)
 
@@ -156,7 +156,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 > 프로그램을 업데이트해서 새 설정 항목이 생기면, 다음 실행 때 기본값이 `settings.toml`에 자동으로 채워져요. 직접 적어둔 주석과 키 순서는 그대로 보존돼요.
 
 > [!caution]
-> `settings.toml`에는 디스코드 봇 토큰이 들어 있으니 다른 사람과 공유하지 마세요. (git에는 올라가지 않도록 `.gitignore`에 등록되어 있어요.)
+> `settings.toml`에는 디스코드 봇 토큰이 들어 있으니 다른 사람과 공유하지 마세요.
 
 
 # 3. 현재 발견된 문제
