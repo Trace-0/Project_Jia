@@ -42,7 +42,7 @@ def calculate_and_save_importance(user_name: str, guild_id: int, user_prompt: st
         response = llm.invoke(prompt.to_messages())
         parsed_response = parser.parse(response.content)
 
-        if parsed_response.summary and parsed_response.importance > 0.1:
+        if parsed_response.summary and parsed_response.importance > config.rag_save_importance_min:
             save_conversation(user=user_name, guild_id=guild_id, summary=parsed_response.summary, importance=parsed_response.importance)
             logging.info(f"[RAG:importance]대화 저장 완료: 서버 아이디({guild_id}), 사용자({user_name}), 요약({parsed_response.summary}), 중요도({parsed_response.importance})")
         else:

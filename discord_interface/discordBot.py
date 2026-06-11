@@ -9,6 +9,7 @@ import asyncio
 import threading
 from config.config_manager import config
 import os
+import sys
 from memory.RAG import get_rag_instance
 from LLM.LLM_model_control import unload_ollama_model, load_ollama_model
 from collections import deque
@@ -125,6 +126,25 @@ def bot():
                     continue
                 return True
             return False
+
+        def on_config_changed(changed: dict):
+            """.env 자동 리로드 후 호출되는 후처리 콜백. (config 워처 스레드에서 실행)
+
+            단순 값 변경은 reload만으로 즉시 반영되지만, 모델 관련 설정은
+            바뀐 항목에 해당하는 모델만 골라서 다시 로드합니다.
+            """
+            from LLM.langchain_llm import reload_llm
+            from discord_interface.espnet_tts_output import reload_tts_model
+            if {"whisper_model", "whisper_device", "whisper_compute_type"} & changed.keys():
+                reload_whisper_model()
+            if "tts_model" in changed:
+                reload_tts_model()
+            if {"llmModel", "llmNumCtx", "llmSystemPrompt"} & changed.keys():
+                reload_llm()
+                if "llmModel" in changed:
+                    old_model, _ = changed["llmModel"]
+                    unload_ollama_model(old_model)  # 이전 모델을 Ollama 메모리에서 내림
+
         class TextGen():
             def __init__(self, ctx):
                 self.ctx = ctx
@@ -144,8 +164,8 @@ def bot():
                 self.buffers: dict[int, list[np.ndarray]] = {} # 사용자별 오디오 청크를 저장하는 버퍼
                 self._current_task: dict[int, asyncio.Task] = {} # 사용자별 발화 종료 감시 태스크
                 self.last_packet_time: dict[int, float] = {} # 사용자별 마지막 패킷 수신 시각 (monotonic)
-                self.timeout_sec = 0.1 # 음성 입력 후 처리를 시작하기까지의 대기 시간
-                self.interrupt_speech_sec = 0.5 # 재생 중단(barge-in) 판정에 필요한 연속 발화 시간
+                # 발화 종료 대기 시간과 barge-in 판정 시간은 config(voice_timeout_sec, voice_interrupt_speech_sec)에서
+                # 사용 시점에 읽으므로 .env 수정만으로 즉시 반영됩니다.
                 self._interrupt_fired: set[int] = set() # 이번 발화에서 이미 인터럽트를 보낸 사용자
                 self.guild = guild
                 self.loop = bot.loop
@@ -195,7 +215,7 @@ def bot():
                 # 지아가 말하는 중에 사용자의 발화가 일정 시간 이상 지속되면 재생을 중단 (barge-in)
                 if not self.only_hear and user.id not in self._interrupt_fired:
                     buffered_sec = sum(chunk.size for chunk in self.buffers[user.id]) / 48000.0
-                    if buffered_sec >= self.interrupt_speech_sec and self._tts_audio_active():
+                    if buffered_sec >= config.voice_interrupt_speech_sec and self._tts_audio_active():
                         self._interrupt_fired.add(user.id)
                         self.loop.call_soon_threadsafe(self._interrupt_playback, user)
 
@@ -225,12 +245,13 @@ def bot():
 
             async def packet_timeout(self, user: discord.User):
                 try:
-                    # 마지막 패킷 이후 timeout_sec 동안 새 패킷이 없을 때까지 대기
+                    # 마지막 패킷 이후 voice_timeout_sec 동안 새 패킷이 없을 때까지 대기
                     while True:
+                        timeout_sec = config.voice_timeout_sec
                         elapsed = time.monotonic() - self.last_packet_time.get(user.id, 0.0)
-                        if elapsed >= self.timeout_sec:
+                        if elapsed >= timeout_sec:
                             break
-                        await asyncio.sleep(self.timeout_sec - elapsed)
+                        await asyncio.sleep(timeout_sec - elapsed)
                     await self.send_vad_and_whisper(user)
                 except asyncio.CancelledError:
                     pass
@@ -395,6 +416,34 @@ def bot():
                 if bot.def_channel:
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 모델 언로드 실패 ({e})")
                 logger.error(f"[Discord:Unload_Model] 모델을 언로드하는 과정에 오류가 발생했어요. :(\n   -> {e}")
+
+        @bot.command(name="jiarestart", description="지아를 재시작해요. 재시작이 필요한 설정 변경(임베딩 모델 등)을 반영할 때 사용해요.")
+        async def jiarestart(ctx):
+            try:
+                await ctx.send("재시작할게요. 잠시 후에 다시 만나요!")
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 재시작 요청")
+                logger.info("[Discord:Restart] 재시작 요청을 받아 프로세스를 다시 시작해요.")
+                # 저장되지 않은 기억을 디스크에 저장
+                from memory.RAG import rag_instances
+                for rag in rag_instances.values():
+                    rag.save_all()
+                # 음성 연결을 정리
+                for vc in list(bot.voice_clients):
+                    try:
+                        await vc.disconnect()
+                    except Exception:
+                        pass
+                # 현재 프로세스를 같은 명령으로 교체해 재시작 (Windows에서는 새 프로세스 실행 후 현재 프로세스 종료)
+                args = [sys.executable] + sys.argv
+                if os.name == "nt":
+                    args = [f'"{a}"' if " " in a else a for a in args]
+                os.execv(sys.executable, args)
+            except Exception as e:
+                await ctx.send(f"재시작 중 오류 발생: {e}")
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 재시작 실패 ({e})")
+                logger.error(f"[Discord:Restart] 재시작 과정에 오류가 발생했어요. :(\n   -> {e}")
 
         @bot.command(name="jia", description="지아와 대화해요")
         async def jia(ctx, *, prompt: str):
@@ -595,6 +644,8 @@ def bot():
             if message.guild.id in bot.autotalk_channels and message.channel.id in bot.autotalk_channels[message.guild.id] and not message.author.bot:
                 await jia(ctx, prompt=message.content)
 
+        # .env 파일 변경을 감시해 재시작 없이 설정을 자동 반영 (모델 관련 설정은 해당 모델만 재로딩)
+        config.start_auto_reload(on_change=on_config_changed)
         bot.run(config.bot_token)
     except Exception as e:
         logger.error(f"[Discord] discord 봇에서 에러 발생! 예외 처리되지 않은 문제에요.\n   -> {e}")

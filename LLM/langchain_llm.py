@@ -85,10 +85,10 @@ def _approx_token_count(messages) -> int:
 def pre_agent_hook(state):
     """에이전트가 LLM을 호출하기 전에 대화 기록이 컨텍스트 윈도우를 넘지 않도록 자릅니다.
 
-    시스템 프롬프트와 응답 생성 여유분(2048)을 제외한 만큼만 기록을 유지하고,
+    시스템 프롬프트와 응답 생성 여유분(llm_response_reserve_tokens)을 제외한 만큼만 기록을 유지하고,
     한도를 넘으면 오래된 메시지부터 제거합니다.
     """
-    budget = max(config.llmNumCtx - len(sys_prompt) - 2048, 2048)
+    budget = max(config.llmNumCtx - len(sys_prompt) - config.llm_response_reserve_tokens, 2048)
     trimmed_messages = trim_messages(
         state["messages"],
         max_tokens=budget,

@@ -9,9 +9,9 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.preprocessing import normalize
 
-# 임베딩 모델을 전역 변수로 한 번만 로드합니다.
+# 임베딩 모델을 전역 변수로 한 번만 로드합니다. (변경 시 재시작 필요 - 기존 인덱스와 차원이 달라질 수 있음)
 logging.info("[RAG:Embedding] SentenceTransformer 모델을 로드하고 있어요...")
-embedding_model = SentenceTransformer("dragonkue/BGE-m3-ko")
+embedding_model = SentenceTransformer(config.embedding_model)
 logging.info("[RAG:Embedding] SentenceTransformer 모델을 로드했어요.")
 
 rag_instances = {}
@@ -83,7 +83,7 @@ class RAG:
             return
 
         date = datetime.now().isoformat()
-        forgettable = importance < 0.8 # 중요도 0.8 미만은 잊어버릴 수 있는 기억으로 처리
+        forgettable = importance < config.rag_forgettable_importance # 기준 중요도 미만은 잊어버릴 수 있는 기억으로 처리
         vector = self.embedding_model.encode([summary], convert_to_numpy=True)[0].astype('float32')
 
         item = {
@@ -129,7 +129,9 @@ class RAG:
         row = cur.fetchone()
         return row
 
-    def retrieve_similar_conversations(self, query: str, top_k: int = 3):
+    def retrieve_similar_conversations(self, query: str, top_k: int | None = None):
+        if top_k is None:
+            top_k = config.rag_top_k
         q_vec = self.embedding_model.encode([query], convert_to_numpy=True).astype('float32')
         q_vec = normalize(q_vec, axis=1)
         D, I = self.index.search(q_vec, top_k)
@@ -149,13 +151,13 @@ class RAG:
             logging.info("[RAG:faiss] 서버 대화 기록 DB에서 결과 값을 찾았어요.")
             summary, importance, timestamp = meta
             warn = ""
-            if importance < 0.5:
+            if importance < config.rag_warn_importance:
                 warn = "\n정확하지 않거나 중요하지 않은 내용이니 이 내용을 참고할 땐 조심스럽게 사용해줘."
             results.append(f"[{timestamp}] {summary}{warn}")
         return results
 
     def get_context(self, user_input: str) -> str:
-        context_snippets = self.retrieve_similar_conversations(user_input, top_k=3)
+        context_snippets = self.retrieve_similar_conversations(user_input)
         context = "\n---\n".join(context_snippets)
         return context.strip()
 
