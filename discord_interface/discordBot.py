@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from discord.ext import voice_recv
+from discord_interface import voice_receive
 import logging
 import numpy as np
 from discord_interface.transformers_whisper import reload_whisper_model
@@ -18,8 +18,6 @@ for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
-voice_recv_logger = logging.getLogger('discord.ext.voice_recv')
-voice_recv_logger.setLevel(logging.ERROR)
 
 logger.setLevel(logging.INFO)
 
@@ -123,7 +121,7 @@ def bot():
                 return task_id
 
         # 음성 데이터를 수신하고 처리하는 클래스
-        class TranscriptionSink(voice_recv.AudioSink):
+        class TranscriptionSink(voice_receive.AudioSink):
             def __init__(self, guild: discord.Guild, voice_channel: discord.VoiceChannel, only_hear: bool = False, textchan_id: int = None):
                 super().__init__()
                 self.buffers: dict[int, list[np.ndarray]] = {} # 사용자별 오디오 청크를 저장하는 버퍼
@@ -139,7 +137,7 @@ def bot():
                 # OPUS 패킷이 아닌 PCM 오디오(float)를 받아야 함
                 return False
 
-            def write(self, user: discord.User, data: voice_recv.VoiceData):
+            def write(self, user: discord.User, data: voice_receive.VoiceData):
                 if not user or user.bot:
                     return
 
@@ -232,13 +230,16 @@ def bot():
             get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
             load_ollama_model(config.llmModel)
             voice_channel = ctx.author.voice.channel
-            # NOTE: 음성 수신은 DAVE E2EE 호환 패치 적용 전까지 비활성화 (송신만 가능)
-            await voice_channel.connect()
-            logger.info(f"[Discord:Join] 음성 채널에 접속할게요 -> {voice_channel.name} (수신 비활성화)")
+            # DAVE(E2EE) 호환 음성 수신 클라이언트로 연결
+            voice_client = await voice_channel.connect(cls=voice_receive.VoiceRecvClient)
+            logger.info(f"[Discord:Join] 음성 채널에 접속할게요 -> {voice_channel.name}")
+            # 음성 수신을 위한 싱크 생성 및 리스닝 시작
+            sink = TranscriptionSink(ctx.channel.guild, voice_channel)
+            voice_client.listen(sink)
             if config.join_reply:
-                await ctx.send("음성 채널에 접속했어요 (음성 인식은 현재 비활성화 상태예요)")
+                await ctx.send("음성 채널에 접속할게요")
             if bot.def_channel:
-                await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.voice.channel.guild.name}/{ctx.author.voice.channel.name}(으)로의 접속 요청 (수신 비활성화)")
+                await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.voice.channel.guild.name}/{ctx.author.voice.channel.name}(으)로의 접속 요청")
 
         @bot.command(name="jialeave", description="지아를 음성 채널에서 내보네요")
         async def jialeave(ctx):
@@ -372,11 +373,39 @@ def bot():
 
         @bot.command(name="jiahear", description="지아가 음성 채널에서 듣고 텍스트로 변환해줘요")
         async def jiahear(ctx, textID: int = None):
-            # NOTE: 음성 수신은 DAVE E2EE 호환 패치 적용 전까지 비활성화
-            await ctx.send("음성 인식 기능은 현재 비활성화 상태예요. 송신 전용 명령(`/jiajoinnoagent`, `/jiajoin`)을 사용해주세요.")
+            if ctx.author.voice is None:
+                await ctx.send("먼저 음성 채널에 들어가주세요")
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 채널 접속 실패 (요청자가 음성 채널 연결 상태가 아님)")
+                return
+
+            textchan = None
+            if not textID:
+                textchan = bot.def_channel
+                if not textchan or not isinstance(textchan, discord.TextChannel):
+                    await ctx.send("텍스트 채널 ID를 입력해주세요")
+                    if bot.def_channel:
+                        await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 인식 실패 (텍스트 채널 ID 입력되지 않음)")
+                    return
+            else:
+                textchan = bot.get_channel(textID)
+                if not textchan or not isinstance(textchan, discord.TextChannel):
+                    await ctx.send("텍스트 채널 ID가 올바르지 않아요")
+                    if bot.def_channel:
+                        await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 인식 실패 (올바르지 않은 텍스트 채널 ID)")
+                    return
+
+            voice_channel = ctx.author.voice.channel
+            # DAVE(E2EE) 호환 음성 수신 클라이언트로 연결
+            voice_client = await voice_channel.connect(cls=voice_receive.VoiceRecvClient)
+            logger.info(f"[Discord:Hear] 음성 채널에 접속할게요 -> {voice_channel.name}")
+            # 음성 수신을 위한 싱크 생성 및 리스닝 시작 - textchan_id 전달
+            sink = TranscriptionSink(ctx.channel.guild, voice_channel, only_hear=True, textchan_id=textchan.id)
+            voice_client.listen(sink)
+            if config.join_reply:
+                await ctx.send("음성 채널에 접속할게요")
             if bot.def_channel:
-                await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 인식 기능 비활성화 상태에서 호출됨")
-            return
+                await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.voice.channel.guild.name}/{ctx.author.voice.channel.name}(으)로의 접속 요청")
 
         @bot.command(name="jiaplay", description="지아가 음성 채널에서 오디오 파일을 재생해요")
         async def jiaplay(ctx, file_path: str):

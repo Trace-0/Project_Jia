@@ -57,7 +57,6 @@ davey==0.1.5
 decorator==5.2.1
 depyf==0.19.0
 dill==0.3.8
-discord-ext-voice_recv==0.5.2a179
 discord.py==2.7.1
 diskcache==5.6.3
 Distance==0.1.3
