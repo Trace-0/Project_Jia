@@ -1,0 +1,53 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# ── Virtual environment ──
+venv/
+.venv/
+env/
+
+# ── Private notes & documents ──
+*.txt
+!requirements.txt
+*.md
+!README.md
+*.docx
+*.pdf
+*.hwp
+개발 일지/
+
+# ── Secrets / credentials ──
+.env
+.env.*
+!.env.example
+config/settings.json
+
+# ── Runtime data & generated output ──
+output_temp/
+memory/data/
+*.db
+*.faiss
+*.log
+
+# ── Large binaries / archives / media / model weights ──
+*.zip
+*.whl
+*.mp4
+*.obj
+*.gguf
+*.safetensors
+*.pt
+*.ckpt
+models/
+sqlite-tools/
+sqlite-tools-*/
+
+# ── Editor / OS ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
