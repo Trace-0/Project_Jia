@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord_interface import voice_receive
 import logging
 import numpy as np
-from discord_interface.transformers_whisper import reload_whisper_model
+from discord_interface.faster_whisper_output import reload_whisper_model
 import asyncio
 import threading
 from config.config_manager import config
