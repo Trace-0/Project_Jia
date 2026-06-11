@@ -3,9 +3,6 @@ AI bot that can chat and converse on Discord
 
 디스코드에서 지아와 함께 채팅 또는 대화를 하며 대화해봅시다!
 
-> [!WARNING]
-> 디스코드 업데이트로 인해 현재 통화방 접근에 문제가 발생하는 현상이 있습니다. 수정이 되기 전에는 통화방 접근 커멘드 이용을 자제하시기 바랍니다.
-
 [설치](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#1-설치) / [커맨드](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#2-지아의-커맨드) / [변경사항](https://github.com/Trace-0/Project_Jia?tab=readme-ov-file#5-변경-내용)
 
 
@@ -23,7 +20,7 @@ AI bot that can chat and converse on Discord
   
   ### 음성 대화의 경우:
   
-  1. 자체 음성 수신 모듈(discord_interface/voice_receive.py)을 사용하여 디스코드 음성을 실시간으로 입력받아요. (discord.py 내장 DAVE E2EE 세션을 활용해 종단간 암호화된 음성도 복호화할 수 있어요.)
+  1. ~~discord-ext-voice-recv 라이브러리를~~ 자체 음성 수신 모듈(discord_interface/voice_receive.py)을 사용하여 디스코드 음성을 실시간으로 입력받아요. (discord.py 내장 DAVE E2EE 세션을 활용해 종단간 암호화된 음성도 복호화할 수 있어요.) (2026년 3월 Discord의 A/V E2EE(DAVE) 프로토콜 사용 강제 업데이트로 인해 이전 라이브러리를 제거했어요.)
   2. Silero-VAD를 사용하여 실제로 말한 내용인지 확인해요. (여기서 지연이 너무 많이 발생하는 문제가 생겨, 어쩔 수 없이 마이크가 계속 열려있는 분은 Silero-VAD 단계를 넘어갈 수 없어요. :( )
   3. Silero-VAD가 실제로 말했다고 생각되는 부분을 적당한 여유를 남겨 잘라내요.
   4. ~~Whisper~~ Faster Whisper 라이브러리를 이용해 말한 내용을 텍스트로 변환해요. (1.1.0 업데이트에서 라이브러리가 변경되었어요. Faster Whisper를 사용하면 훨씬 더 빠른 결과를 받을 수 있기 때문이에요.)
