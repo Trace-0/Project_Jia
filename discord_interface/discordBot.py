@@ -2,8 +2,9 @@ import discord
 from discord.ext import commands
 from discord_interface import voice_receive
 import logging
+import time
 import numpy as np
-from discord_interface.transformers_whisper import reload_whisper_model
+from discord_interface.faster_whisper_output import reload_whisper_model
 import asyncio
 import threading
 from config.config_manager import config
@@ -90,12 +91,13 @@ class JiaBot(commands.Bot):
     async def setup_hook(self):
         self.audio_stream_manager = AudioStreamManager(self)
 
-    def send_text_result_sync(self, task_id: str, result: str, user: str):
+    def send_text_result_sync(self, task_id: str, result: str):
         """스레드에서 호출되어 봇의 루프에 메시지 전송 태스크를 생성하는 함수"""
-        ctx = self.textdict.get(task_id)
-        if ctx:
+        # 작업당 한 번만 전송하므로 매핑을 꺼내면서 제거 (누적 방지)
+        ctx = self.textdict.pop(task_id, None)
+        if ctx and result:
             # 비동기 함수인 ctx.send를 메인 루프에서 실행되도록 예약
-            self.loop.create_task(ctx.send(f"[{user}]: {result}"))
+            self.loop.create_task(ctx.send(result))
 
 def bot():
     try:
@@ -110,13 +112,28 @@ def bot():
         bot = JiaBot(command_prefix="/", intents=intents)
         global bot_client
         bot_client = bot
+
+        def llm_still_in_use(exclude_guild_id: int | None = None) -> bool:
+            """자동 대화 채널이나 음성 연결이 남아 있어 LLM이 아직 필요한지 확인합니다.
+
+            exclude_guild_id: 지금 연결을 해제 중인 길드는 사용 중으로 치지 않습니다.
+            """
+            if any(bot.autotalk_channels.values()):
+                return True
+            for vc in bot.voice_clients:
+                if exclude_guild_id is not None and vc.guild.id == exclude_guild_id:
+                    continue
+                return True
+            return False
         class TextGen():
             def __init__(self, ctx):
                 self.ctx = ctx
 
             def text_gen_requestor(self, prompt):
-                # 파이프라인 작업 실행
                 task_id = str(uuid.uuid4())
+                # 작업 시작 전에 응답을 보낼 채널(ctx)을 먼저 등록해 응답 유실을 방지
+                bot.textdict[task_id] = self.ctx
+                # 파이프라인 작업 실행
                 pipeline.run_text_task(task_id, self.ctx.author.name, self.ctx.channel.guild.id, prompt)
                 return task_id
 
@@ -125,7 +142,8 @@ def bot():
             def __init__(self, guild: discord.Guild, voice_channel: discord.VoiceChannel, only_hear: bool = False, textchan_id: int = None):
                 super().__init__()
                 self.buffers: dict[int, list[np.ndarray]] = {} # 사용자별 오디오 청크를 저장하는 버퍼
-                self._current_task: dict[int, asyncio.Task] = {} # 사용자별 타임아웃 작업을 저장하는 딕셔너리
+                self._current_task: dict[int, asyncio.Task] = {} # 사용자별 발화 종료 감시 태스크
+                self.last_packet_time: dict[int, float] = {} # 사용자별 마지막 패킷 수신 시각 (monotonic)
                 self.timeout_sec = 0.1 # 음성 입력 후 처리를 시작하기까지의 대기 시간
                 self.guild = guild
                 self.loop = bot.loop
@@ -141,14 +159,17 @@ def bot():
                 if not user or user.bot:
                     return
 
-                # 이전 타임아웃 작업을 취소하여 타이머를 리셋
-                def runner():
-                    task = self._current_task.get(user.id)
-                    if task and not task.done():
-                        task.cancel()
-                    self._current_task[user.id] = self.loop.create_task(self.packet_timeout(user))
+                # 마지막 패킷 시각만 기록하고, 감시 태스크가 없을 때만 새로 만듦
+                # (무음 시에는 패킷 자체가 오지 않으므로 시각 경과만으로 발화 종료를 감지 가능)
+                self.last_packet_time[user.id] = time.monotonic()
+                task = self._current_task.get(user.id)
+                if task is None or task.done():
+                    def runner():
+                        t = self._current_task.get(user.id)
+                        if t is None or t.done():
+                            self._current_task[user.id] = self.loop.create_task(self.packet_timeout(user))
 
-                self.loop.call_soon_threadsafe(runner)
+                    self.loop.call_soon_threadsafe(runner)
 
                 # data.pcm은 48kHz, 16-bit, 2-channel PCM 형식
                 audio_data = np.frombuffer(data.pcm, dtype=np.int16)
@@ -171,7 +192,12 @@ def bot():
 
             async def packet_timeout(self, user: discord.User):
                 try:
-                    await asyncio.sleep(self.timeout_sec)
+                    # 마지막 패킷 이후 timeout_sec 동안 새 패킷이 없을 때까지 대기
+                    while True:
+                        elapsed = time.monotonic() - self.last_packet_time.get(user.id, 0.0)
+                        if elapsed >= self.timeout_sec:
+                            break
+                        await asyncio.sleep(self.timeout_sec - elapsed)
                     await self.send_vad_and_whisper(user)
                 except asyncio.CancelledError:
                     pass
@@ -185,8 +211,7 @@ def bot():
                 try:
                     full_audio = np.concatenate(user_buffer)
                     # 파이프라인 작업 실행
-                    task_id = str(uuid.uuid4())
-                    pipeline.run_audio_task(task_id, user.name, self.guild.id, full_audio, self.only_hear, self.textchan_id)
+                    pipeline.run_audio_task(user.name, self.guild.id, full_audio, self.only_hear, self.textchan_id)
                 except Exception as e:
                     logger.error(f"[{user.name}] VAD(대화 감지) 또는 Whisper(텍스트화)에서 오류가 발생했어요. :( \n   -> {e}")
 
@@ -197,7 +222,9 @@ def bot():
                         task.cancel()
                 self._current_task.clear()
                 self.buffers.clear()
-                unload_ollama_model(config.llmModel)
+                # 다른 곳에서 LLM을 쓰는 중이면 언로드하지 않음 (오디오 수신 스레드에서 호출되므로 동기 호출 가능)
+                if not llm_still_in_use(exclude_guild_id=self.guild.id):
+                    unload_ollama_model(config.llmModel)
 
         async def get_channel_sure() -> discord.TextChannel | None:
             await bot.wait_until_ready()
@@ -228,7 +255,8 @@ def bot():
                 return
             # RAG 인덱스 동기화
             get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
-            load_ollama_model(config.llmModel)
+            # 모델 로드 동안 이벤트 루프가 멈추지 않도록 백그라운드 스레드에서 실행
+            await asyncio.to_thread(load_ollama_model, config.llmModel)
             voice_channel = ctx.author.voice.channel
             # DAVE(E2EE) 호환 음성 수신 클라이언트로 연결
             voice_client = await voice_channel.connect(cls=voice_receive.VoiceRecvClient)
@@ -279,8 +307,16 @@ def bot():
         async def jiareload(ctx):
             try:
                 from config.config_manager import config as global_config
+                from LLM.langchain_llm import reload_llm
+                from discord_interface.espnet_tts_output import reload_tts_model
+                old_llm_model = global_config.llmModel
                 global_config.reload()
                 reload_whisper_model()  # Whisper 모델 재로딩
+                reload_tts_model()  # TTS 모델 재로딩
+                reload_llm()  # LLM과 시스템 프롬프트 재로딩, 에이전트 캐시 초기화
+                if old_llm_model != global_config.llmModel:
+                    # 모델이 바뀌었으면 이전 모델을 Ollama 메모리에서 내려요
+                    await asyncio.to_thread(unload_ollama_model, old_llm_model)
                 get_rag_instance(ctx.guild.id).save_all() # 변경된 사항이 있을 수 있으니 저장
                 get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss() # RAG 인덱스 재동기화
                 await ctx.send("설정이 성공적으로 재로딩되었어요")
@@ -329,9 +365,7 @@ def bot():
                 async with ctx.channel.typing():
                     get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
                     textgen = TextGen(ctx)
-                    task_id = textgen.text_gen_requestor(prompt)
-                    # task_id와 context를 매핑하여 나중에 응답을 보낼 채널을 찾음
-                    bot.textdict[task_id] = ctx
+                    textgen.text_gen_requestor(prompt)
             except Exception as e:
                 await ctx.send(f"지아와 대화 중 오류 발생: {e}")
                 if bot.def_channel:
@@ -345,8 +379,7 @@ def bot():
                 async with ctx.channel.typing():
                     get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
                     textgen = TextGen(ctx)
-                    task_id = textgen.text_gen_requestor(prompt)
-                    bot.textdict[task_id] = ctx
+                    textgen.text_gen_requestor(prompt)
             except Exception as e:
                 await ctx.send(f"지아와 대화 중 오류 발생: {e}")
                 if bot.def_channel:
@@ -438,11 +471,24 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 정지 실패 (지아가 음성 채널에 접속하지 않음)")
                 return
             try:
+                # 진행 중인 TTS 생성에 취소 신호를 먼저 보내 뒷문장이 새로 큐에 들어오지 않게 함
+                cancelled = pipeline.cancel_tts_tasks(ctx.guild.id)
+                # 대기 중인 오디오 큐를 비워서 다음 항목이 이어 재생되지 않게 함
+                if bot.audio_stream_manager and ctx.guild.id in bot.audio_stream_manager.streams:
+                    bot.audio_stream_manager.streams[ctx.guild.id].clear()
                 if voice_client.is_playing():
-                    voice_client.stop()
+                    if isinstance(voice_client, voice_receive.VoiceRecvClient):
+                        voice_client.stop_playback()  # 음성 수신은 유지한 채 재생만 정지
+                    else:
+                        voice_client.stop()
                     await ctx.send("재생을 멈췄어요")
                     if bot.def_channel:
                         await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 재생 정지 요청")
+                elif cancelled:
+                    # 재생 시작 전이지만 음성 생성이 진행 중이던 경우
+                    await ctx.send("준비 중이던 음성 생성을 취소했어요")
+                    if bot.def_channel:
+                        await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 생성 취소 요청")
                 else:
                     await ctx.send("지금은 재생 중이 아니에요")
                     if bot.def_channel:
@@ -489,7 +535,9 @@ def bot():
                 return
             
             bot.autotalk_channels[ctx.guild.id].remove(ctx.channel.id)
-            unload_ollama_model(config.llmModel)
+            # 다른 자동 대화 채널이나 음성 연결이 없을 때만 언로드
+            if not llm_still_in_use():
+                await asyncio.to_thread(unload_ollama_model, config.llmModel)
             await ctx.send("이 채널의 대화 기능을 종료했어요.")
 
         @bot.event

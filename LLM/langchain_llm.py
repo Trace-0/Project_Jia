@@ -61,8 +61,11 @@ def time_tool():
     )
 
 calltool = [DuckDuckGoSearchResults()]
-sys_prompt = config.llmSystemPrompt
-sys_prompt += f"""\n\n너는 trace_0가 만든 대화 인공지능 '지아'야. 너는 지아라는 사람처럼 대화하고 행동해야 해.\n\n대화의 흐름에 맞춰서 자연스럽게 이어지는 응답을 생성해줘.\n다만, 프로그램의 한계로 너의 응답이 1000자를 넘으면 너의 응답을 사용자가 보거나 들을 수 없게 돼. 그러니 절대 너무 길게 응답을 생성하지마.\n\n만약 사용자가 이전에 있었던 일에 대해 떠올리길 원한다면 'Conversation_Memory_Search' 도구를 호출해줘. 여기에는 너가 모르는 대화 기록이 저장되어 있으니 과거의 일을 떠올려야 한다면 반드시 이 도구를 호출해.\n인터넷 검색이 필요하다면 'DuckDuckGoSearchResults' 도구를 호출해줘.\n응답에 시간 정보가 필요하다면 'Current_Time' 도구를 호출해줘.\n디스코드 메시지나 이미지를 불러오고 싶다면 'get_discord_message' 도구를 호출해줘."""
+
+def _build_sys_prompt() -> str:
+    return config.llmSystemPrompt + f"""\n\n너는 trace_0가 만든 대화 인공지능 '지아'야. 너는 지아라는 사람처럼 대화하고 행동해야 해.\n\n대화의 흐름에 맞춰서 자연스럽게 이어지는 응답을 생성해줘.\n다만, 프로그램의 한계로 너의 응답이 1000자를 넘으면 너의 응답을 사용자가 보거나 들을 수 없게 돼. 그러니 절대 너무 길게 응답을 생성하지마.\n\n만약 사용자가 이전에 있었던 일에 대해 떠올리길 원한다면 'Conversation_Memory_Search' 도구를 호출해줘. 여기에는 너가 모르는 대화 기록이 저장되어 있으니 과거의 일을 떠올려야 한다면 반드시 이 도구를 호출해.\n인터넷 검색이 필요하다면 'DuckDuckGoSearchResults' 도구를 호출해줘.\n응답에 시간 정보가 필요하다면 'Current_Time' 도구를 호출해줘.\n디스코드 메시지나 이미지를 불러오고 싶다면 'get_discord_message' 도구를 호출해줘."""
+
+sys_prompt = _build_sys_prompt()
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -86,6 +89,19 @@ def run_async(coro):
 
 callagents = {}
 textagents = {}
+
+def reload_llm():
+    """reload된 config로 LLM과 시스템 프롬프트를 다시 만들고 에이전트 캐시를 비웁니다.
+
+    에이전트는 생성 시점의 llm/sys_prompt를 캡처하므로 캐시를 비워야 새 설정이 반영됩니다.
+    checkpointer는 유지되어 대화 기록은 보존됩니다.
+    """
+    global llm, sys_prompt
+    llm = ChatOllama(model=config.llmModel, keep_alive=-1)
+    sys_prompt = _build_sys_prompt()
+    callagents.clear()
+    textagents.clear()
+    logging.info(f"[LLM:Reloader] LLM({config.llmModel})과 시스템 프롬프트를 다시 불러왔어요.")
 
 def get_agent_for_guild(guild_id: int, is_text: bool):
     if is_text:

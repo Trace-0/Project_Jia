@@ -6,13 +6,13 @@ import os
 import sys
 import time
 
-# 프로젝트 루트를 시스템 경로에 추가하여 모듈을 임포트할 수 있도록 합니다.
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# 프로젝트 루트(unused/의 상위 폴더)를 시스템 경로에 추가하여 모듈을 임포트할 수 있도록 합니다.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from discord_interface.vad import get_speech_timestamps_from_array
-from discord_interface.transformers_whisper import transcribe_sync, reload_whisper_model
+from unused.transformers_whisper import transcribe_sync, reload_whisper_model
 from LLM.langchain_llm import astream_call_response
-from discord_interface.edge_tts_output import generate_with_edge_tts
+from unused.edge_tts_output import generate_with_edge_tts
 from config.config_manager import config
 from LLM.LLM_model_control import load_ollama_model, unload_ollama_model
 

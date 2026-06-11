@@ -272,6 +272,10 @@ class VoiceRecvClient(discord.VoiceClient):
         self._receiver.start()
         logger.info('음성 수신을 시작했어요 (DAVE 프로토콜 v%d)', self._connection.dave_protocol_version)
 
+    def stop_playback(self):
+        """재생 중인 오디오만 멈춰요 (음성 수신은 유지)"""
+        super().stop()
+
     def stop_listening(self):
         """음성 수신을 중단해요"""
         if self._receiver is not None:
