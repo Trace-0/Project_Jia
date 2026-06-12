@@ -114,7 +114,7 @@ class Config:
     join_reply: bool = True
     leave_reply: bool = True
     faiss_threshold: float = 0.5
-    whisper_model: str = "openai/whisper-large-v3-turbo"
+    whisper_model: str = "turbo"
     llmModel: str = "gemma4:latest"
     llmNumCtx: int = 16384
     tts_model: str = ""
