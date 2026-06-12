@@ -4,6 +4,7 @@ import threading
 import queue
 import time
 import uuid
+import discord
 from discord_interface.vad import get_speech_timestamps_from_array
 from discord_interface.faster_whisper_output import transcribe_sync
 from discord_interface.espnet_tts_output import generate_tts
@@ -70,6 +71,44 @@ def play_sound_file(guild: int, file_path: str) -> tuple[bool, str]:
         logging.error(f"[Pipeline] 이벤트 루프가 닫혀 효과음을 큐에 추가할 수 없습니다: {e}")
         return False, "봇의 이벤트 루프가 닫혀 재생할 수 없습니다."
     return True, "효과음을 재생 큐에 추가했습니다."
+
+# 길드별로 마지막 텍스트 대화(/jia, autotalk)가 오간 채널. 생성된 이미지를 보낼 곳을 정할 때 사용합니다.
+_active_text_channels: dict[int, int] = {}
+
+def set_active_text_channel(guild: int, channel_id: int):
+    """텍스트 대화가 시작된 채널을 기록합니다. (discordBot의 TextGen에서 호출)"""
+    _active_text_channels[guild] = channel_id
+
+def send_image_to_guild(guild: int, image_bytes: bytes, filename: str, caption: str = "", prefer_voice_channel: bool = False) -> tuple[bool, str]:
+    """생성된 이미지를 길드의 적절한 채널에 첨부 파일로 전송합니다. (성공 여부, 메시지)를 반환합니다.
+
+    prefer_voice_channel이 True면 접속 중인 음성 채널의 채팅에 우선 전송하고,
+    아니면 마지막 텍스트 대화 채널 -> 음성 채널 채팅 순서로 시도합니다.
+    """
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+
+    guild_obj = bot_instance.get_guild(guild)
+    voice_client = guild_obj.voice_client if guild_obj else None
+    voice_channel = getattr(voice_client, "channel", None) if (voice_client and voice_client.is_connected()) else None
+    text_channel = bot_instance.get_channel(_active_text_channels.get(guild, 0))
+
+    # 음성 대화에서 요청됐으면 음성 채널 채팅 우선, 텍스트 대화에서 요청됐으면 그 채널 우선
+    candidates = [voice_channel, text_channel] if prefer_voice_channel else [text_channel, voice_channel]
+    channel = next((c for c in candidates if c is not None and hasattr(c, "send")), None)
+    if channel is None:
+        return False, "이미지를 보낼 채널을 찾지 못했습니다."
+
+    try:
+        file = discord.File(io.BytesIO(image_bytes), filename=filename)
+        asyncio.run_coroutine_threadsafe(
+            channel.send(content=caption or None, file=file), bot_instance.loop
+        ).result(timeout=30)
+    except Exception as e:
+        logging.error(f"[Pipeline] 이미지 전송 중 오류 발생: {e}")
+        return False, f"이미지 전송 중 오류가 발생했습니다: {e}"
+    logging.info(f"[Pipeline] 생성된 이미지를 채널({channel})에 올렸어요. (guild={guild})")
+    return True, "이미지를 채널에 올렸습니다."
 
 def send_text_result(task_id: str, text: str):
     """디스코드 봇에 텍스트 결과 전송을 요청하는 함수"""

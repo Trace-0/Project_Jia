@@ -144,6 +144,9 @@ def bot():
                 if "llmModel" in changed:
                     old_model, _ = changed["llmModel"]
                     unload_ollama_model(old_model)  # 이전 모델을 Ollama 메모리에서 내림
+            elif {"comfyui_url", "comfyui_checkpoint"} & changed.keys():
+                # 이미지 생성 도구는 에이전트 생성 시점에 등록되므로 캐시를 비워 도구 목록을 다시 구성
+                reload_llm()
 
         class TextGen():
             def __init__(self, ctx):
@@ -153,6 +156,8 @@ def bot():
                 task_id = str(uuid.uuid4())
                 # 작업 시작 전에 응답을 보낼 채널(ctx)을 먼저 등록해 응답 유실을 방지
                 bot.textdict[task_id] = self.ctx
+                # 생성된 이미지 등을 보낼 수 있도록 대화 중인 채널을 기록
+                pipeline.set_active_text_channel(self.ctx.guild.id, self.ctx.channel.id)
                 # 파이프라인 작업 실행
                 pipeline.run_text_task(task_id, self.ctx.author.name, self.ctx.channel.guild.id, prompt)
                 return task_id

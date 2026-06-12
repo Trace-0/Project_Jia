@@ -12,6 +12,7 @@ from LLM.langchain_tools.mcp_manager import client
 from memory.calculate_importance import calculate_and_save_importance
 from LLM.langchain_tools.load_discord_message import load_discord_message_tool
 from LLM.langchain_tools.soundboard import soundboard_tool
+from LLM.langchain_tools.comfyui_image import comfyui_image_tool, is_comfyui_enabled
 import asyncio
 import re
 import threading
@@ -63,7 +64,10 @@ def time_tool():
 calltool = [DuckDuckGoSearchResults()]
 
 def _build_sys_prompt() -> str:
-    return config.llmSystemPrompt + f"""\n\n너는 trace_0가 만든 대화 인공지능 '지아'야. 너는 지아라는 사람처럼 대화하고 행동해야 해.\n\n대화의 흐름에 맞춰서 자연스럽게 이어지는 응답을 생성해줘.\n다만, 프로그램의 한계로 너의 응답이 1000자를 넘으면 너의 응답을 사용자가 보거나 들을 수 없게 돼. 그러니 절대 너무 길게 응답을 생성하지마.\n\n만약 사용자가 이전에 있었던 일에 대해 떠올리길 원한다면 'Conversation_Memory_Search' 도구를 호출해줘. 여기에는 너가 모르는 대화 기록이 저장되어 있으니 과거의 일을 떠올려야 한다면 반드시 이 도구를 호출해.\n인터넷 검색이 필요하다면 'DuckDuckGoSearchResults' 도구를 호출해줘.\n응답에 시간 정보가 필요하다면 'Current_Time' 도구를 호출해줘.\n디스코드 메시지나 이미지를 불러오고 싶다면 'get_discord_message' 도구를 호출해줘.\n대화 상황에 어울리는 효과음을 음성 채널에서 재생하고 싶다면 'play_soundboard' 도구를 호출해줘. 도구 설명에 있는 효과음만 재생할 수 있어."""
+    prompt = config.llmSystemPrompt + f"""\n\n너는 trace_0가 만든 대화 인공지능 '지아'야. 너는 지아라는 사람처럼 대화하고 행동해야 해.\n\n대화의 흐름에 맞춰서 자연스럽게 이어지는 응답을 생성해줘.\n다만, 프로그램의 한계로 너의 응답이 1000자를 넘으면 너의 응답을 사용자가 보거나 들을 수 없게 돼. 그러니 절대 너무 길게 응답을 생성하지마.\n\n만약 사용자가 이전에 있었던 일에 대해 떠올리길 원한다면 'Conversation_Memory_Search' 도구를 호출해줘. 여기에는 너가 모르는 대화 기록이 저장되어 있으니 과거의 일을 떠올려야 한다면 반드시 이 도구를 호출해.\n인터넷 검색이 필요하다면 'DuckDuckGoSearchResults' 도구를 호출해줘.\n응답에 시간 정보가 필요하다면 'Current_Time' 도구를 호출해줘.\n디스코드 메시지나 이미지를 불러오고 싶다면 'get_discord_message' 도구를 호출해줘.\n대화 상황에 어울리는 효과음을 음성 채널에서 재생하고 싶다면 'play_soundboard' 도구를 호출해줘. 도구 설명에 있는 효과음만 재생할 수 있어."""
+    if is_comfyui_enabled():
+        prompt += "\n사용자가 그림이나 이미지를 그려달라고 하면 'generate_image' 도구를 호출해줘. 프롬프트는 영어로 작성해야 하고, 생성에는 시간이 조금 걸리니 그림을 그리고 있다고 알려주면 좋아."
+    return prompt
 
 sys_prompt = _build_sys_prompt()
 
@@ -124,6 +128,8 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
         if guild_id not in textagents:
             _time = time_tool()
             tools = run_async(client.get_tools()) + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
+            if is_comfyui_enabled():
+                tools.append(comfyui_image_tool(guild_id, prefer_voice_channel=False))
             react_agent = create_react_agent(
                 model=llm,
                 tools=tools,
@@ -137,6 +143,8 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
         if guild_id not in callagents:
             _time = time_tool()
             tools = calltool + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
+            if is_comfyui_enabled():
+                tools.append(comfyui_image_tool(guild_id, prefer_voice_channel=True))
             call_react_agent = create_react_agent(
                 model=llm,
                 tools=tools,

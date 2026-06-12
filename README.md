@@ -16,6 +16,7 @@ AI bot that can chat and converse on Discord
 - 대화하면서 알게 된 여러분에 대한 사실(취향, 관계 등)을 사람별로 기억해요. (`/jiamemory profile`로 확인할 수 있어요.)
 - 기억되는 게 싫다면 `/jiamemory optout`으로 거부할 수 있어요. 거부한 사용자는 대화 기록과 프로필 저장에서 제외돼요.
 - 음성 채널이 한동안 조용하면 지아가 먼저 말을 걸어볼 수도 있어요. (기본은 꺼져 있고, `proactive_idle_sec` 설정으로 켤 수 있어요.)
+- (선택 기능) 로컬에서 ComfyUI를 사용하고 있다면, 지아에게 그림을 그려달라고 할 수 있어요! 생성된 이미지는 대화 중인 채널에 올라와요. (`settings.toml`의 `[comfyui]` 항목을 설정해야 해요. 설정하지 않으면 이 기능은 완전히 비활성화돼요.)
 - 이 모든걸 로컬 환경에서 작동할 수 있어요. 외부로의 데이터 이동이 없어 유출 걱정없이 사용할 수 있어요.
 
 <details>
@@ -166,6 +167,16 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[rag]` `forget_threshold` | `0.15` | 감쇠된 중요도가 이 값 미만이 되면 기억을 삭제해요 | 즉시 |
 | `[rag]` `retrieval_boost` | `0.05` | 기억이 검색에 사용될 때마다 중요도를 이만큼 올려요 (자주 쓰는 기억은 오래 유지) | 즉시 |
 | `[rag]` `profile_max_facts` | `20` | 사용자별 프로필에 보관할 최대 사실 개수 (초과 시 오래된 것부터 삭제) | 즉시 |
+| `[comfyui]` `url` | (없음) | ComfyUI 서버 주소 (예: `http://127.0.0.1:8188`). 비워두면 이미지 생성 기능을 사용하지 않아요 (선택 기능) | 즉시 |
+| `[comfyui]` `checkpoint` | (없음) | 사용할 체크포인트 파일 이름 (ComfyUI의 `models/checkpoints` 안 파일명) | 즉시 |
+| `[comfyui]` `steps` | `20` | 이미지 생성 스텝 수 (Flux Schnell은 4, 일반 SD 모델은 20~30 권장) | 즉시 |
+| `[comfyui]` `cfg` | `7.0` | CFG 스케일 (Flux Schnell은 1.0, 일반 SD 모델은 7.0 권장) | 즉시 |
+| `[comfyui]` `width` | `1024` | 생성 이미지 가로 크기 | 즉시 |
+| `[comfyui]` `height` | `1024` | 생성 이미지 세로 크기 | 즉시 |
+| `[comfyui]` `sampler` | `euler` | 샘플러 이름 | 즉시 |
+| `[comfyui]` `scheduler` | `normal` | 스케줄러 이름 (Flux 계열은 `simple` 권장) | 즉시 |
+| `[comfyui]` `negative_prompt` | (없음) | 네거티브 프롬프트 (Flux 계열은 비워둠) | 즉시 |
+| `[comfyui]` `timeout_sec` | `120` | 이미지 생성 대기 제한 시간(초) | 즉시 |
 | `[settings]` `watch_interval_sec` | `2.0` | `settings.toml` 변경 감지 주기(초) | 재시작 필요 |
 
 > [!tip]
