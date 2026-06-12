@@ -1,4 +1,5 @@
 import asyncio
+import io
 import threading
 import queue
 import uuid
@@ -36,6 +37,37 @@ def tts_and_play(text: str, guild: int, task_id: str):
                 logging.error(f"[Pipeline] 봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다.")
         except Exception as e:
             logging.error(f"[Pipeline] TTS 생성 및 재생 작업 큐에 추가 중 오류 발생: {e}")
+
+def play_sound_file(guild: int, file_path: str) -> tuple[bool, str]:
+    """사운드보드 효과음 파일을 봇 오디오 재생 큐에 추가합니다. (성공 여부, 메시지)를 반환합니다.
+
+    파일 경로 검증은 호출하는 쪽(LLM/langchain_tools/soundboard.py)에서 수행합니다.
+    경로(str) 대신 파일 내용을 BytesIO로 읽어 큐에 넣는 이유: AudioStreamManager.after_play가
+    문자열 경로로 받은 오디오를 임시 TTS 파일로 간주해 재생 후 삭제하기 때문입니다.
+    """
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    guild_obj = bot_instance.get_guild(guild)
+    voice_client = guild_obj.voice_client if guild_obj else None
+    if not voice_client or not voice_client.is_connected():
+        return False, "지아가 음성 채널에 접속해 있지 않습니다."
+    try:
+        with open(file_path, "rb") as f:
+            audio_buffer = io.BytesIO(f.read())
+    except OSError as e:
+        logging.error(f"[Pipeline] 효과음 파일을 읽지 못했어요: {e}")
+        return False, f"효과음 파일을 읽을 수 없습니다: {e}"
+    if not bot_instance.loop or bot_instance.loop.is_closed():
+        return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+    try:
+        bot_instance.loop.call_soon_threadsafe(
+            bot_instance.audio_stream_manager.add_to_queue,
+            guild, str(uuid.uuid4()), audio_buffer
+        )
+    except RuntimeError as e:
+        logging.error(f"[Pipeline] 이벤트 루프가 닫혀 효과음을 큐에 추가할 수 없습니다: {e}")
+        return False, "봇의 이벤트 루프가 닫혀 재생할 수 없습니다."
+    return True, "효과음을 재생 큐에 추가했습니다."
 
 def send_text_result(task_id: str, text: str):
     """디스코드 봇에 텍스트 결과 전송을 요청하는 함수"""
@@ -223,10 +255,25 @@ async def _conversation_worker(guild: int):
     except Exception as e:
         logging.error(f"[Pipeline] 대화 워커 처리 중 오류 발생: {e}")
 
+def _get_voice_participants(guild: int) -> list[str]:
+    """봇이 접속한 음성 채널에 함께 있는 사용자(봇 제외) 이름 목록을 반환합니다."""
+    try:
+        g = bot_instance.get_guild(guild) if bot_instance else None
+        voice_client = g.voice_client if g else None
+        channel = getattr(voice_client, "channel", None)
+        if not channel:
+            return []
+        return [m.name for m in channel.members if not m.bot]
+    except Exception as e:
+        logging.warning(f"[Pipeline] 음성 채널 참가자 목록 조회 실패: {e}")
+        return []
+
 async def _respond_to_batch(guild: int, utterances: list[tuple[str, str]]):
     """발화 배치 하나에 대해 LLM 응답을 스트리밍하며 TTS 재생 큐에 추가합니다."""
     # 직전 응답 재생이 사용자 발화로 중단됐다면 이번 호출에서 LLM에 알림
     interrupted = _pop_playback_interrupted(guild)
+    # 현재 음성 채널 참가자 목록 (LLM이 누구에게 하는 말인지 판단할 참고 자료)
+    participants = _get_voice_participants(guild)
     # 같은 응답의 문장들이 순서대로 재생되도록 단일 워커가 순서대로 TTS 생성
     stream_task_id = str(uuid.uuid4())
     sentence_queue: queue.Queue = queue.Queue()
@@ -235,7 +282,7 @@ async def _respond_to_batch(guild: int, utterances: list[tuple[str, str]]):
     worker = threading.Thread(target=_tts_worker, args=(sentence_queue, guild, stream_task_id, cancel_event), daemon=True)
     worker.start()
     try:
-        async for sentence in astream_call_response(guild, utterances, interrupted=interrupted):
+        async for sentence in astream_call_response(guild, utterances, interrupted=interrupted, participants=participants):
             # 취소돼도 응답 생성은 끝까지 진행해 대화 기록은 보존하고, 재생만 건너뜀
             if sentence and not cancel_event.is_set():
                 sentence_queue.put(sentence)

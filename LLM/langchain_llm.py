@@ -11,6 +11,7 @@ from datetime import datetime
 from LLM.langchain_tools.mcp_manager import client
 from memory.calculate_importance import calculate_and_save_importance
 from LLM.langchain_tools.load_discord_message import load_discord_message_tool
+from LLM.langchain_tools.soundboard import soundboard_tool
 import asyncio
 import re
 import threading
@@ -63,7 +64,7 @@ def time_tool():
 calltool = [DuckDuckGoSearchResults()]
 
 def _build_sys_prompt() -> str:
-    return config.llmSystemPrompt + f"""\n\n너는 trace_0가 만든 대화 인공지능 '지아'야. 너는 지아라는 사람처럼 대화하고 행동해야 해.\n\n대화의 흐름에 맞춰서 자연스럽게 이어지는 응답을 생성해줘.\n다만, 프로그램의 한계로 너의 응답이 1000자를 넘으면 너의 응답을 사용자가 보거나 들을 수 없게 돼. 그러니 절대 너무 길게 응답을 생성하지마.\n\n만약 사용자가 이전에 있었던 일에 대해 떠올리길 원한다면 'Conversation_Memory_Search' 도구를 호출해줘. 여기에는 너가 모르는 대화 기록이 저장되어 있으니 과거의 일을 떠올려야 한다면 반드시 이 도구를 호출해.\n인터넷 검색이 필요하다면 'DuckDuckGoSearchResults' 도구를 호출해줘.\n응답에 시간 정보가 필요하다면 'Current_Time' 도구를 호출해줘.\n디스코드 메시지나 이미지를 불러오고 싶다면 'get_discord_message' 도구를 호출해줘."""
+    return config.llmSystemPrompt + f"""\n\n너는 trace_0가 만든 대화 인공지능 '지아'야. 너는 지아라는 사람처럼 대화하고 행동해야 해.\n\n대화의 흐름에 맞춰서 자연스럽게 이어지는 응답을 생성해줘.\n다만, 프로그램의 한계로 너의 응답이 1000자를 넘으면 너의 응답을 사용자가 보거나 들을 수 없게 돼. 그러니 절대 너무 길게 응답을 생성하지마.\n\n만약 사용자가 이전에 있었던 일에 대해 떠올리길 원한다면 'Conversation_Memory_Search' 도구를 호출해줘. 여기에는 너가 모르는 대화 기록이 저장되어 있으니 과거의 일을 떠올려야 한다면 반드시 이 도구를 호출해.\n인터넷 검색이 필요하다면 'DuckDuckGoSearchResults' 도구를 호출해줘.\n응답에 시간 정보가 필요하다면 'Current_Time' 도구를 호출해줘.\n디스코드 메시지나 이미지를 불러오고 싶다면 'get_discord_message' 도구를 호출해줘.\n대화 상황에 어울리는 효과음을 음성 채널에서 재생하고 싶다면 'play_soundboard' 도구를 호출해줘. 도구 설명에 있는 효과음만 재생할 수 있어."""
 
 sys_prompt = _build_sys_prompt()
 
@@ -123,7 +124,7 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
     if is_text:
         if guild_id not in textagents:
             _time = time_tool()
-            tools = run_async(client.get_tools()) + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id)]
+            tools = run_async(client.get_tools()) + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
             react_agent = create_react_agent(
                 model=llm,
                 tools=tools,
@@ -136,7 +137,7 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
     else:
         if guild_id not in callagents:
             _time = time_tool()
-            tools = calltool + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id)]
+            tools = calltool + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
             call_react_agent = create_react_agent(
                 model=llm,
                 tools=tools,
@@ -180,8 +181,12 @@ def generate_response(user: str, guild: int, prompt: str) -> str:
 # 음성 대화에서 LLM이 "응답하지 않는 것이 자연스럽다"고 판단했을 때 출력하는 마커
 VOICE_PASS_MARKER = "[PASS]"
 
-def _build_voice_input(utterances: list[tuple[str, str]], interrupted: bool = False) -> str:
-    """발화 묶음을 화자 라벨이 붙은 다인 대화 입력으로 구성합니다."""
+def _build_voice_input(utterances: list[tuple[str, str]], interrupted: bool = False, participants: list[str] = None) -> str:
+    """발화 묶음을 화자 라벨이 붙은 다인 대화 입력으로 구성합니다.
+
+    participants가 주어지면 현재 음성 채널 참가자 목록을 함께 전달해,
+    LLM이 발화가 누구를 향한 것인지(지아인지, 다른 사람인지) 판단할 근거로 씁니다.
+    """
     lines = "\n".join(f"{speaker}: {text}" for speaker, text in utterances)
     notice = ""
     if interrupted:
@@ -189,22 +194,41 @@ def _build_voice_input(utterances: list[tuple[str, str]], interrupted: bool = Fa
             "(참고: 너의 직전 응답은 음성으로 재생되던 도중 사용자가 말을 시작해서 중단됐어. "
             "사용자들은 그 응답을 끝까지 듣지 못했을 수 있어. 이 점을 감안해서 자연스럽게 대화를 이어가줘.)\n\n"
         )
+
+    roster = ""
+    if participants:
+        names = ", ".join(participants)
+        roster = f"(현재 음성 채널 참가자: {names} — 너를 제외하고 {len(participants)}명)\n"
+
+    if participants and len(participants) == 1:
+        # 1대1 상황: 발화 상대가 지아뿐이므로 침묵하지 않고 응답하는 쪽으로 안내
+        guidance = (
+            "지금 음성 채널에는 사용자가 한 명뿐이라, 이 발화는 너에게 하는 말일 가능성이 매우 높아. 대화 흐름에 맞는 응답을 생성해줘.\n"
+            f"혼잣말처럼 정말 응답이 필요 없는 발화일 때만, 다른 말은 하지 말고 정확히 {VOICE_PASS_MARKER} 라고만 답해줘."
+        )
+    else:
+        guidance = (
+            "여러 사람이 함께 대화하고 있을 수 있어. 위 참가자 목록을 참고해서 발화가 너에게 하는 말인지, 다른 참가자에게 하는 말인지 판단해줘. "
+            "너에게 하는 말이거나 네가 자연스럽게 끼어들 만한 상황이라면 대화 흐름에 맞는 응답을 생성해줘.\n"
+            f"사람들끼리 대화하는 중이라 네가 응답하지 않는 것이 자연스럽다면, 다른 말은 하지 말고 정확히 {VOICE_PASS_MARKER} 라고만 답해줘."
+        )
+
     return (
-        f"{notice}다음은 음성 채널에서 방금 오간 발화야:\n"
+        f"{notice}{roster}다음은 음성 채널에서 방금 오간 발화야:\n"
         f"{lines}\n\n"
-        "여러 사람이 함께 대화하고 있을 수 있어. 너에게 하는 말이거나 네가 자연스럽게 끼어들 만한 상황이라면 대화 흐름에 맞는 응답을 생성해줘.\n"
-        f"사람들끼리 대화하는 중이라 네가 응답하지 않는 것이 자연스럽다면, 다른 말은 하지 말고 정확히 {VOICE_PASS_MARKER} 라고만 답해줘."
+        f"{guidance}"
     )
 
-async def astream_call_response(guild: int, utterances: list[tuple[str, str]], interrupted: bool = False):
+async def astream_call_response(guild: int, utterances: list[tuple[str, str]], interrupted: bool = False, participants: list[str] = None):
     """발화 묶음에 대한 LLM 응답을 스트리밍하고 문장 단위로 yield하는 비동기 제너레이터
 
     utterances: (화자 이름, 발화 텍스트) 목록. 여러 화자의 발화를 한 번에 전달할 수 있습니다.
     interrupted: 직전 응답 재생이 사용자 발화로 중단(인터럽트)되었음을 LLM에 알립니다.
+    participants: 현재 음성 채널 참가자(봇 제외) 이름 목록. 발화 대상 판단의 참고 자료로 전달됩니다.
     LLM이 응답할 상황이 아니라고 판단하면(응답이 [PASS]로 시작) 아무것도 yield하지 않습니다.
     """
     agent = get_agent_for_guild(guild_id=guild, is_text=False)
-    input_content = _build_voice_input(utterances, interrupted=interrupted)
+    input_content = _build_voice_input(utterances, interrupted=interrupted, participants=participants)
     config = {"configurable": {"thread_id": f"{guild}"}}
 
     full_response = ""

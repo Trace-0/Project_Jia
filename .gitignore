@@ -29,6 +29,7 @@ config/settings.json
 # ── Runtime data & generated output ──
 output_temp/
 memory/data/
+soundboard/
 *.db
 *.faiss
 *.log
