@@ -4,6 +4,7 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, trim_messages
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.tools import Tool
 from memory.RAG import RAG, get_rag_instance
 import logging
@@ -169,6 +170,50 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
             callagents[guild_id] = call_react_agent
         return callagents[guild_id]
 
+# === 오래 걸리는 도구 호출 시 대기 안내 ===
+# 도구 실행이 시작되면 사용자에게 "기다려 달라"는 안내를 먼저 전달합니다.
+# (텍스트 대화: 채널에 안내 메시지 / 음성 대화: 안내 문구를 즉시 TTS로 재생)
+TOOL_WAIT_NOTICES = {
+    "duckduckgo_results_json": "잠깐만, 인터넷에서 찾아보고 올게.",
+}
+# 즉시 끝나거나 자체 안내를 보내는 도구는 대기 안내를 생략
+TOOL_NOTICE_EXCLUDE = {
+    "Current_Time",                # 즉시 완료
+    "play_soundboard",             # 즉시 완료
+    "Conversation_Memory_Search",  # 로컬 검색이라 빠름
+    "get_discord_message",         # 로컬 API라 빠름
+    "generate_image",              # wait_message로 자체 안내를 보냄
+}
+DEFAULT_TOOL_WAIT_NOTICE = "잠깐만, 확인해보고 올게."  # MCP 등 외부 도구용
+
+def _tool_wait_notice(tool_name: str) -> str | None:
+    """도구 이름에 맞는 대기 안내 문구를 반환합니다. 안내가 필요 없는 도구면 None."""
+    if not tool_name or tool_name in TOOL_NOTICE_EXCLUDE:
+        return None
+    return TOOL_WAIT_NOTICES.get(tool_name, DEFAULT_TOOL_WAIT_NOTICE)
+
+class ToolWaitNoticeHandler(BaseCallbackHandler):
+    """텍스트 대화에서 도구 실행이 시작되면 채널에 대기 안내 메시지를 보내는 콜백 (응답당 1회)"""
+    def __init__(self, guild: int):
+        self.guild = guild
+        self.notified = False
+
+    def on_tool_start(self, serialized, input_str, **kwargs):
+        if self.notified:
+            return
+        notice = _tool_wait_notice((serialized or {}).get("name", ""))
+        if not notice:
+            return
+        self.notified = True
+        # 순환 임포트 방지 + 에이전트 루프를 막지 않도록 별도 스레드에서 전송
+        from discord_interface import pipeline
+        threading.Thread(
+            target=pipeline.send_placeholder_message,
+            args=(self.guild, notice),
+            kwargs={"prefer_voice_channel": False},
+            daemon=True,
+        ).start()
+
 def _build_profile_note(guild: int, usernames: list[str]) -> str:
     """사용자들에 대해 기억하고 있는 프로필 사실을 LLM 입력에 끼워 넣을 안내문으로 만듭니다."""
     rag = get_memory_manager(guild)
@@ -200,7 +245,8 @@ def generate_response(user: str, guild: int, prompt: str) -> str:
 
     input_message = HumanMessage(content=message_content)
 
-    config = {"configurable": {"thread_id": f"{guild}"}}
+    # 오래 걸리는 도구 실행 시 채널에 대기 안내 메시지를 먼저 보내는 콜백 등록
+    config = {"configurable": {"thread_id": f"{guild}"}, "callbacks": [ToolWaitNoticeHandler(guild)]}
     response = run_async(agent.ainvoke({"messages" : [input_message]}, config))
     logging.info(response)
     for msg in reversed(response['messages']):
@@ -286,9 +332,16 @@ async def astream_call_response(guild: int, utterances: list[tuple[str, str]], i
     buffer = ""
     head_checked = False  # 응답 머리가 PASS 마커인지 판별하기 전까지 yield 보류
     passed = False
+    tool_notified = False  # 도구 대기 안내는 응답당 한 번만 재생
     async for event in agent.astream_events({"messages": [HumanMessage(content=input_content)]}, config, version="v1"):
         kind = event["event"]
-        if kind == "on_chat_model_stream":
+        if kind == "on_tool_start" and not passed and not tool_notified:
+            # 오래 걸리는 도구가 시작되면 기다려 달라는 안내를 즉시 음성으로 재생
+            notice = _tool_wait_notice(event.get("name", ""))
+            if notice:
+                tool_notified = True
+                yield notice  # LLM 응답이 아니므로 full_response(기억 저장)에는 포함하지 않음
+        elif kind == "on_chat_model_stream":
             chunk = event["data"]["chunk"]
             if isinstance(chunk, AIMessageChunk) and chunk.content:
                 content = chunk.content
