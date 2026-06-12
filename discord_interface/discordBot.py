@@ -320,6 +320,8 @@ def bot():
             # 음성 수신을 위한 싱크 생성 및 리스닝 시작
             sink = TranscriptionSink(ctx.channel.guild, voice_channel)
             voice_client.listen(sink)
+            # 채널이 조용할 때 먼저 말을 걸어보는 유휴 감시 시작 (proactive_idle_sec가 0이면 동작 안 함)
+            pipeline.start_proactive_monitor(ctx.guild.id)
             if config.join_reply:
                 await ctx.send("음성 채널에 접속할게요")
             if bot.def_channel:
@@ -330,6 +332,8 @@ def bot():
             if ctx.voice_client:
                 # RAG 인덱스 저장
                 get_rag_instance(ctx.guild.id).save_all()
+                # 먼저 말 걸기 유휴 감시 중단
+                pipeline.stop_proactive_monitor(ctx.guild.id)
                 # 처리 대기 중인 발화 정리
                 pipeline.clear_pending_utterances(ctx.guild.id)
                 # 오디오 스트림 정리
@@ -602,6 +606,111 @@ def bot():
                 await ctx.send("음성 채널에 접속할게요")
             if bot.def_channel:
                 await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.voice.channel.guild.name}/{ctx.author.voice.channel.name}(으)로의 접속 요청 (음성 인식 없이)")
+
+        @bot.command(name="jiamemory", description="지아의 기억을 관리해요")
+        async def jiamemory(ctx, action: str = "help", *, arg: str = ""):
+            try:
+                rag = get_rag_instance(ctx.guild.id)
+                action = action.lower()
+                arg = arg.strip()
+
+                def format_rows(rows) -> str:
+                    lines = []
+                    for mem_id, username, summary, importance, timestamp in rows:
+                        summary_short = summary if len(summary) <= 120 else summary[:120] + "…"
+                        lines.append(f"`{mem_id[:8]}` [{timestamp[:16]}] ({username}, 중요도 {importance:.2f})\n　{summary_short}")
+                    return "\n".join(lines)
+
+                if action == "list":
+                    page = int(arg) if arg.isdigit() else 1
+                    total = rag.count_memories()
+                    rows = rag.list_memories(page=page, page_size=5)
+                    if not rows:
+                        await ctx.send("이 페이지에는 기억이 없어요." if total else "아직 이 서버에 저장된 기억이 없어요.")
+                        return
+                    last_page = (total + 4) // 5
+                    await ctx.send(f"**이 서버의 기억** (총 {total}개, {page}/{last_page} 페이지)\n{format_rows(rows)}\n\n삭제하려면 `/jiamemory delete <ID>`를 사용해주세요.")
+
+                elif action == "search":
+                    if not arg:
+                        await ctx.send("검색어를 함께 입력해주세요. 예) `/jiamemory search 생일`")
+                        return
+                    rows = await asyncio.to_thread(rag.search_memories, arg)
+                    if not rows:
+                        await ctx.send("관련된 기억을 찾지 못했어요.")
+                        return
+                    await ctx.send(f"**'{arg}' 검색 결과**\n{format_rows(rows)}")
+
+                elif action == "delete":
+                    if not arg:
+                        await ctx.send("삭제할 기억의 ID를 함께 입력해주세요. ID는 `/jiamemory list`에서 확인할 수 있어요.")
+                        return
+                    # ID는 uuid 형식의 일부만 허용 (LIKE 와일드카드 등으로 전체 삭제되는 것 방지)
+                    if len(arg) < 4 or not arg.replace("-", "").isalnum():
+                        await ctx.send("ID는 4자 이상으로, `/jiamemory list`에 표시된 형태 그대로 입력해주세요.")
+                        return
+                    deleted = rag.delete_memory(arg)
+                    if deleted:
+                        # 삭제된 기억이 검색되지 않도록 인덱스를 다시 생성
+                        await asyncio.to_thread(rag.sync_all_metadata_to_faiss)
+                        await asyncio.to_thread(rag.save_all)
+                        await ctx.send(f"기억 {deleted}개를 삭제했어요.")
+                        if bot.def_channel:
+                            await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 기억 삭제 요청 ({deleted}개)")
+                    else:
+                        await ctx.send("해당 ID로 시작하는 기억을 찾지 못했어요.")
+
+                elif action == "profile":
+                    name = arg or ctx.author.name
+                    facts = rag.get_profile_facts(name)
+                    if not facts:
+                        await ctx.send(f"{name}에 대해 따로 기억하고 있는 정보가 없어요.")
+                        return
+                    listed = "\n".join(f"- {f}" for f in facts)
+                    await ctx.send(f"**{name}에 대해 기억하고 있는 것**\n{listed}")
+
+                elif action == "optout":
+                    if rag.is_opted_out(ctx.author.name):
+                        await ctx.send("이미 기억 기능 사용을 거부한 상태예요.")
+                        return
+                    await asyncio.to_thread(rag.set_optout, ctx.author.name, True)
+                    await asyncio.to_thread(rag.sync_all_metadata_to_faiss)
+                    await ctx.send(f"{ctx.author.name}님의 대화와 정보를 이제 기억하지 않을게요. 기존 프로필과 단독 대화 기억도 삭제했어요.\n다시 켜려면 `/jiamemory optin`을 입력해주세요.")
+                    if bot.def_channel:
+                        await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.name} 기억 거부(opt-out) 설정")
+
+                elif action == "optin":
+                    if not rag.is_opted_out(ctx.author.name):
+                        await ctx.send("지금도 기억 기능을 사용 중이에요.")
+                        return
+                    await asyncio.to_thread(rag.set_optout, ctx.author.name, False)
+                    await ctx.send(f"이제부터 {ctx.author.name}님과의 대화를 다시 기억할게요.")
+                    if bot.def_channel:
+                        await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.name} 기억 거부 해제(opt-in)")
+
+                elif action == "status":
+                    opted_out = rag.is_opted_out(ctx.author.name)
+                    facts = rag.get_profile_facts(ctx.author.name)
+                    total = rag.count_memories()
+                    state = "기억 안 함 (opt-out)" if opted_out else "기억 중"
+                    await ctx.send(f"**{ctx.author.name}님의 기억 설정**\n- 상태: {state}\n- 프로필에 저장된 사실: {len(facts)}개\n- 이 서버의 전체 기억: {total}개")
+
+                else:
+                    await ctx.send(
+                        "**/jiamemory 사용법**\n"
+                        "`/jiamemory list [페이지]` — 이 서버의 기억을 최신순으로 보여줘요\n"
+                        "`/jiamemory search <검색어>` — 기억을 검색해요\n"
+                        "`/jiamemory delete <ID>` — 해당 ID로 시작하는 기억을 삭제해요\n"
+                        "`/jiamemory profile [이름]` — 사용자에 대해 기억하는 정보를 보여줘요 (생략 시 본인)\n"
+                        "`/jiamemory optout` — 내 대화와 정보를 기억하지 않게 해요 (기존 프로필/단독 기억도 삭제)\n"
+                        "`/jiamemory optin` — 기억 기능을 다시 켜요\n"
+                        "`/jiamemory status` — 내 기억 설정 상태를 확인해요"
+                    )
+            except Exception as e:
+                await ctx.send(f"기억 관리 중 오류 발생: {e}")
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 기억 관리 오류 ({e})")
+                logger.error(f"[Discord:Memory] 기억을 관리하는 과정에 오류가 발생했어요. :(\n   -> {e}")
 
         @bot.command(name="jiatalk", description="지아와 대화를 시작해요. (대화에 /jia를 붙이지 않아도 괜찮아요.)")
         async def jiatalk(ctx):

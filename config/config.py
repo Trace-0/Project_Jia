@@ -29,6 +29,7 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     "voice": {
         "voice_timeout_sec": ("timeout_sec", "마지막 음성 패킷 이후 이 시간 동안 패킷이 없으면 발화 종료로 판단 (초)"),
         "voice_interrupt_speech_sec": ("interrupt_speech_sec", "재생 중단(barge-in) 판정에 필요한 연속 발화 시간 (초)"),
+        "proactive_idle_sec": ("proactive_idle_sec", "음성 채널에서 이 시간(초) 동안 아무도 말이 없으면 지아가 먼저 말을 걸어봄 (0이면 사용 안 함)"),
     },
     "vad": {
         "vad_threshold": ("threshold", "발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감)"),
@@ -60,6 +61,10 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "rag_forgettable_importance": ("forgettable_importance", "이 중요도 미만은 잊어버릴 수 있는 기억으로 저장"),
         "rag_warn_importance": ("warn_importance", "이 중요도 미만의 기억은 부정확할 수 있다는 경고와 함께 사용"),
         "rag_save_importance_min": ("save_importance_min", "이 중요도 이하의 대화는 기억으로 저장하지 않음"),
+        "rag_forget_decay_per_day": ("forget_decay_per_day", "잊어버릴 수 있는 기억의 하루당 중요도 감쇠량 (0이면 망각 안 함)"),
+        "rag_forget_threshold": ("forget_threshold", "감쇠된 중요도가 이 값 미만이 되면 기억을 삭제"),
+        "rag_retrieval_boost": ("retrieval_boost", "기억이 검색에 사용될 때마다 중요도를 이만큼 올림 (자주 쓰는 기억은 오래 유지)"),
+        "rag_profile_max_facts": ("profile_max_facts", "사용자별 프로필에 보관할 최대 사실 개수 (초과 시 오래된 것부터 삭제)"),
     },
     "settings": {
         "settings_watch_interval_sec": ("watch_interval_sec", "settings.toml 변경 감지 주기 (초, 변경 시 재시작 필요)"),
@@ -126,6 +131,7 @@ class Config:
     # === 음성 수신/발화 감지 (저장 즉시 반영) ===
     voice_timeout_sec: float = 0.1
     voice_interrupt_speech_sec: float = 0.5
+    proactive_idle_sec: int = 0  # 0이면 먼저 말 걸기 비활성화
 
     # === VAD (저장 즉시 반영) ===
     vad_threshold: float = 0.7
@@ -145,6 +151,10 @@ class Config:
     rag_forgettable_importance: float = 0.8
     rag_warn_importance: float = 0.5
     rag_save_importance_min: float = 0.1
+    rag_forget_decay_per_day: float = 0.02
+    rag_forget_threshold: float = 0.15
+    rag_retrieval_boost: float = 0.05
+    rag_profile_max_facts: int = 20
 
     # === LLM 세부 (저장 즉시 반영) ===
     llm_response_reserve_tokens: int = 2048

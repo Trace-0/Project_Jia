@@ -12,6 +12,10 @@ AI bot that can chat and converse on Discord
 - 채팅을 보고 대답할 수 있어요.
 - 모르는 내용이 있으면 언제든 인터넷에서 정보를 검색할 수 있어요.
 - 이전 대화를 기억하고 활용할 수 있어요. (서버별로 기억해서 다른 서버에서 기억에 대해 물어보면 곤란해할 수 있어요.)
+- 사람처럼 기억을 잊기도 해요. 중요하지 않은 기억은 시간이 지나면 흐려지다 사라지고, 자주 꺼내 본 기억은 더 오래 남아요.
+- 대화하면서 알게 된 여러분에 대한 사실(취향, 관계 등)을 사람별로 기억해요. (`/jiamemory profile`로 확인할 수 있어요.)
+- 기억되는 게 싫다면 `/jiamemory optout`으로 거부할 수 있어요. 거부한 사용자는 대화 기록과 프로필 저장에서 제외돼요.
+- 음성 채널이 한동안 조용하면 지아가 먼저 말을 걸어볼 수도 있어요. (기본은 꺼져 있고, `proactive_idle_sec` 설정으로 켤 수 있어요.)
 - 이 모든걸 로컬 환경에서 작동할 수 있어요. 외부로의 데이터 이동이 없어 유출 걱정없이 사용할 수 있어요.
 
 <details>
@@ -112,6 +116,13 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `/jiatalk` | 해당 채널에서 작성하는 모든 대화는 지아가 대답해줘요. 이제 `/jia`나 `/지아`를 입력하지 않아도 괜찮아요. |
 | `/jiastoptalk` | `/jiatalk` 기능을 멈춰요. |
 | `/jiarestart` | 지아가 재시작돼요. 재시작이 필요한 설정을 바꿨을 때 사용해요. |
+| `/jiamemory list (페이지)` | 이 서버에 저장된 기억을 최신순으로 보여줘요. |
+| `/jiamemory search [검색어]` | 저장된 기억을 유사도로 검색해요. |
+| `/jiamemory delete [ID]` | 해당 ID로 시작하는 기억을 삭제해요. (ID는 list/search에서 확인) |
+| `/jiamemory profile (이름)` | 지아가 그 사용자에 대해 기억하고 있는 사실을 보여줘요. (이름 생략 시 본인) |
+| `/jiamemory optout` | 지아가 나에 대한 대화와 정보를 기억하지 않게 해요. 기존 프로필과 단독 대화 기억도 함께 삭제돼요. |
+| `/jiamemory optin` | 기억 기능을 다시 켜요. |
+| `/jiamemory status` | 내 기억 설정 상태(거부 여부, 프로필 개수 등)를 확인해요. |
 
 
 # 2-1. 설정(settings.toml) 항목
@@ -130,6 +141,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[bot]` `leave_reply` | `true` | 음성 채널 퇴장 시 안내 메시지 전송 여부 | 즉시 |
 | `[voice]` `timeout_sec` | `0.1` | 마지막 음성 패킷 이후 이 시간 동안 패킷이 없으면 발화가 끝났다고 판단해요 | 즉시 |
 | `[voice]` `interrupt_speech_sec` | `0.5` | 지아가 말하는 중 사용자의 발화가 이 시간 이상 이어지면 재생을 중단해요(barge-in) | 즉시 |
+| `[voice]` `proactive_idle_sec` | `0` | 음성 채널에서 이 시간(초) 동안 아무도 말이 없으면 지아가 먼저 말을 걸어봐요 (0이면 사용 안 함) | 즉시 |
 | `[vad]` `threshold` | `0.7` | 발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감) | 즉시 |
 | `[vad]` `min_speech_ms` | `150` | 이보다 짧은 발화 구간은 무시해요 | 즉시 |
 | `[vad]` `min_silence_ms` | `1000` | 발화 구간 분리에 필요한 최소 무음 시간 | 즉시 |
@@ -150,6 +162,10 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[rag]` `forgettable_importance` | `0.8` | 이 중요도 미만은 잊어버릴 수 있는 기억으로 저장해요 | 즉시 |
 | `[rag]` `warn_importance` | `0.5` | 이 중요도 미만의 기억은 부정확할 수 있다는 경고와 함께 사용해요 | 즉시 |
 | `[rag]` `save_importance_min` | `0.1` | 이 중요도 이하의 대화는 기억으로 저장하지 않아요 | 즉시 |
+| `[rag]` `forget_decay_per_day` | `0.02` | 잊어버릴 수 있는 기억의 하루당 중요도 감쇠량 (0이면 망각 기능 끔) | 즉시 |
+| `[rag]` `forget_threshold` | `0.15` | 감쇠된 중요도가 이 값 미만이 되면 기억을 삭제해요 | 즉시 |
+| `[rag]` `retrieval_boost` | `0.05` | 기억이 검색에 사용될 때마다 중요도를 이만큼 올려요 (자주 쓰는 기억은 오래 유지) | 즉시 |
+| `[rag]` `profile_max_facts` | `20` | 사용자별 프로필에 보관할 최대 사실 개수 (초과 시 오래된 것부터 삭제) | 즉시 |
 | `[settings]` `watch_interval_sec` | `2.0` | `settings.toml` 변경 감지 주기(초) | 재시작 필요 |
 
 > [!tip]

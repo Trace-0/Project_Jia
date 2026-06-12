@@ -2,11 +2,13 @@ import asyncio
 import io
 import threading
 import queue
+import time
 import uuid
 from discord_interface.vad import get_speech_timestamps_from_array
 from discord_interface.faster_whisper_output import transcribe_sync
 from discord_interface.espnet_tts_output import generate_tts
 from LLM.langchain_llm import astream_call_response, generate_response
+from config.config_manager import config
 import logging
 import torch
 import torchaudio
@@ -199,6 +201,71 @@ _convo_tasks: dict[int, asyncio.Task] = {}
 # 다음 LLM 호출에 "직전 응답이 끊겼다"는 안내를 함께 전달한 뒤 해제됩니다.
 _interrupted_guilds: set[int] = set()
 
+# === 먼저 말 걸기 (proactive) ===
+# 음성 채널이 proactive_idle_sec 동안 조용하면 지아가 먼저 말을 걸어볼지 LLM에 물어봅니다.
+# 발화 큐에 센티널을 넣어 기존 대화 워커로 직렬 처리되므로 실제 발화와 충돌하지 않습니다.
+PROACTIVE_SENTINEL = "__JIA_PROACTIVE__"
+_proactive_tasks: dict[int, asyncio.Task] = {}
+_last_activity: dict[int, float] = {}
+# 지아가 먼저 말을 건 뒤 아직 아무도 대답하지 않은 길드. (사용자 발화가 올 때까지 다시 말 걸지 않음)
+_proactive_waiting: set[int] = set()
+
+def start_proactive_monitor(guild: int):
+    """길드의 음성 채널 유휴 감시를 시작합니다. (봇 이벤트 루프에서 호출)"""
+    _last_activity[guild] = time.monotonic()
+    _proactive_waiting.discard(guild)
+    task = _proactive_tasks.get(guild)
+    if task is None or task.done():
+        _proactive_tasks[guild] = asyncio.create_task(_proactive_monitor(guild))
+
+def stop_proactive_monitor(guild: int):
+    """길드의 음성 채널 유휴 감시를 중단합니다."""
+    task = _proactive_tasks.pop(guild, None)
+    if task and not task.done():
+        task.cancel()
+    _last_activity.pop(guild, None)
+    _proactive_waiting.discard(guild)
+
+async def _proactive_monitor(guild: int):
+    """주기적으로 유휴 시간을 확인해, 충분히 조용하면 먼저 말 걸기 시도를 발화 큐에 넣는 워커"""
+    try:
+        while True:
+            await asyncio.sleep(5)
+            g = bot_instance.get_guild(guild) if bot_instance else None
+            voice_client = g.voice_client if g else None
+            if not voice_client or not voice_client.is_connected():
+                break  # 음성 연결이 끊기면 감시 종료
+            idle_sec = config.proactive_idle_sec
+            if idle_sec <= 0 or guild in _proactive_waiting:
+                continue
+            # 채널에 사람이 없으면 타이머만 초기화 (들어오자마자 말 걸지 않도록)
+            if not _get_voice_participants(guild):
+                _last_activity[guild] = time.monotonic()
+                continue
+            # 응답 생성/재생 중이거나 처리 대기 발화가 있으면 유휴 상태가 아님
+            manager = bot_instance.audio_stream_manager if bot_instance else None
+            busy = bool(_pending_utterances.get(guild)) or (
+                manager and (manager.playing.get(guild) or any(manager.streams.get(guild, {}).values()))
+            )
+            if busy:
+                continue
+            if time.monotonic() - _last_activity.get(guild, time.monotonic()) < idle_sec:
+                continue
+            # 먼저 말 걸기 시도: 센티널 발화를 큐에 넣어 기존 워커로 직렬 처리
+            logging.info(f"[Pipeline:Proactive] 길드({guild})가 {idle_sec}초 동안 조용해서 먼저 말을 걸어볼게요.")
+            _proactive_waiting.add(guild)
+            _last_activity[guild] = time.monotonic()
+            _pending_utterances.setdefault(guild, []).append((PROACTIVE_SENTINEL, ""))
+            task = _convo_tasks.get(guild)
+            if task is None or task.done():
+                _convo_tasks[guild] = asyncio.create_task(_conversation_worker(guild))
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logging.error(f"[Pipeline:Proactive] 유휴 감시 중 오류 발생: {e}")
+    finally:
+        _proactive_tasks.pop(guild, None)
+
 def mark_playback_interrupted(guild: int):
     """재생이 사용자 발화로 중단되었음을 기록합니다."""
     _interrupted_guilds.add(guild)
@@ -233,6 +300,10 @@ async def process_audio(user, guild, audio_data_48k, only_hear: bool = False, te
                 logging.warning(f"[Pipeline] 텍스트 채널이 지정되지 않아 변환 결과를 전달할 곳이 없습니다.")
             return
 
+        # 사용자 발화가 들어왔으니 유휴 타이머를 초기화하고, 먼저 말 걸기 대기 상태를 해제
+        _last_activity[guild] = time.monotonic()
+        _proactive_waiting.discard(guild)
+
         # 발화를 길드별 대기열에 쌓고, 대화 워커가 없으면 새로 시작
         _pending_utterances.setdefault(guild, []).append((user, text))
         task = _convo_tasks.get(guild)
@@ -252,6 +323,8 @@ async def _conversation_worker(guild: int):
             await _respond_to_batch(guild, utterances)
             # 재생이 끝날 때까지 기다리는 동안 들어온 발화는 다음 배치로 묶임
             await _wait_for_playback(guild)
+            # 지아의 발화가 끝난 시점부터 유휴 시간을 다시 계산
+            _last_activity[guild] = time.monotonic()
     except Exception as e:
         logging.error(f"[Pipeline] 대화 워커 처리 중 오류 발생: {e}")
 
@@ -270,6 +343,11 @@ def _get_voice_participants(guild: int) -> list[str]:
 
 async def _respond_to_batch(guild: int, utterances: list[tuple[str, str]]):
     """발화 배치 하나에 대해 LLM 응답을 스트리밍하며 TTS 재생 큐에 추가합니다."""
+    # 먼저 말 걸기 센티널 분리: 실제 발화가 함께 들어왔다면 일반 응답을 우선함
+    real_utterances = [u for u in utterances if u[0] != PROACTIVE_SENTINEL]
+    proactive = (len(real_utterances) == 0) and (len(utterances) > 0) and utterances[0][0] == PROACTIVE_SENTINEL
+    if not real_utterances and not proactive:
+        return
     # 직전 응답 재생이 사용자 발화로 중단됐다면 이번 호출에서 LLM에 알림
     interrupted = _pop_playback_interrupted(guild)
     # 현재 음성 채널 참가자 목록 (LLM이 누구에게 하는 말인지 판단할 참고 자료)
@@ -282,7 +360,7 @@ async def _respond_to_batch(guild: int, utterances: list[tuple[str, str]]):
     worker = threading.Thread(target=_tts_worker, args=(sentence_queue, guild, stream_task_id, cancel_event), daemon=True)
     worker.start()
     try:
-        async for sentence in astream_call_response(guild, utterances, interrupted=interrupted, participants=participants):
+        async for sentence in astream_call_response(guild, real_utterances, interrupted=interrupted, participants=participants, proactive=proactive):
             # 취소돼도 응답 생성은 끝까지 진행해 대화 기록은 보존하고, 재생만 건너뜀
             if sentence and not cancel_event.is_set():
                 sentence_queue.put(sentence)
