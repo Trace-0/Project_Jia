@@ -79,26 +79,70 @@ def set_active_text_channel(guild: int, channel_id: int):
     """텍스트 대화가 시작된 채널을 기록합니다. (discordBot의 TextGen에서 호출)"""
     _active_text_channels[guild] = channel_id
 
-def send_image_to_guild(guild: int, image_bytes: bytes, filename: str, caption: str = "", prefer_voice_channel: bool = False) -> tuple[bool, str]:
-    """생성된 이미지를 길드의 적절한 채널에 첨부 파일로 전송합니다. (성공 여부, 메시지)를 반환합니다.
+def _resolve_send_channel(guild: int, prefer_voice_channel: bool = False):
+    """이미지/안내 메시지를 보낼 채널을 찾습니다.
 
     prefer_voice_channel이 True면 접속 중인 음성 채널의 채팅에 우선 전송하고,
     아니면 마지막 텍스트 대화 채널 -> 음성 채널 채팅 순서로 시도합니다.
     """
-    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
-        return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
-
     guild_obj = bot_instance.get_guild(guild)
     voice_client = guild_obj.voice_client if guild_obj else None
     voice_channel = getattr(voice_client, "channel", None) if (voice_client and voice_client.is_connected()) else None
     text_channel = bot_instance.get_channel(_active_text_channels.get(guild, 0))
-
-    # 음성 대화에서 요청됐으면 음성 채널 채팅 우선, 텍스트 대화에서 요청됐으면 그 채널 우선
     candidates = [voice_channel, text_channel] if prefer_voice_channel else [text_channel, voice_channel]
-    channel = next((c for c in candidates if c is not None and hasattr(c, "send")), None)
+    return next((c for c in candidates if c is not None and hasattr(c, "send")), None)
+
+def send_placeholder_message(guild: int, text: str, prefer_voice_channel: bool = False) -> tuple[discord.Message | None, str]:
+    """안내 문구를 채널에 먼저 보내고, 나중에 수정할 수 있도록 보낸 메시지 객체를 반환합니다.
+
+    (메시지 객체 또는 None, 설명)을 반환합니다. 봇 스레드가 아닌 곳에서 호출해야 합니다.
+    """
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return None, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+    channel = _resolve_send_channel(guild, prefer_voice_channel)
+    if channel is None:
+        return None, "메시지를 보낼 채널을 찾지 못했습니다."
+    try:
+        message = asyncio.run_coroutine_threadsafe(channel.send(text), bot_instance.loop).result(timeout=30)
+    except Exception as e:
+        logging.error(f"[Pipeline] 안내 메시지 전송 중 오류 발생: {e}")
+        return None, f"안내 메시지 전송 중 오류가 발생했습니다: {e}"
+    return message, "안내 메시지를 보냈습니다."
+
+def edit_message_attach_image(message: discord.Message, image_bytes: bytes, filename: str, content: str = "") -> tuple[bool, str]:
+    """보내둔 메시지를 수정해 생성된 이미지를 첨부합니다. (성공 여부, 메시지)를 반환합니다."""
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+    try:
+        file = discord.File(io.BytesIO(image_bytes), filename=filename)
+        asyncio.run_coroutine_threadsafe(
+            message.edit(content=content, attachments=[file]), bot_instance.loop
+        ).result(timeout=30)
+    except Exception as e:
+        logging.error(f"[Pipeline] 메시지에 이미지를 첨부하는 중 오류 발생: {e}")
+        return False, f"메시지에 이미지를 첨부하는 중 오류가 발생했습니다: {e}"
+    logging.info(f"[Pipeline] 안내 메시지를 수정해 생성된 이미지를 올렸어요. (guild={message.guild.id if message.guild else '?'})")
+    return True, "이미지를 채널에 올렸습니다."
+
+def edit_message_text(message: discord.Message, content: str):
+    """보내둔 메시지의 내용만 수정합니다. (실패 안내 등에 사용)"""
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(message.edit(content=content), bot_instance.loop).result(timeout=30)
+    except Exception as e:
+        logging.error(f"[Pipeline] 메시지 수정 중 오류 발생: {e}")
+
+def send_image_to_guild(guild: int, image_bytes: bytes, filename: str, caption: str = "", prefer_voice_channel: bool = False) -> tuple[bool, str]:
+    """생성된 이미지를 길드의 적절한 채널에 새 메시지로 전송합니다. (성공 여부, 메시지)를 반환합니다.
+
+    안내 메시지 수정(edit_message_attach_image)이 실패했을 때의 대체 경로로도 사용합니다.
+    """
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+    channel = _resolve_send_channel(guild, prefer_voice_channel)
     if channel is None:
         return False, "이미지를 보낼 채널을 찾지 못했습니다."
-
     try:
         file = discord.File(io.BytesIO(image_bytes), filename=filename)
         asyncio.run_coroutine_threadsafe(

@@ -1,4 +1,5 @@
-from langchain_core.tools import Tool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 from config.config_manager import config
 import requests
 import logging
@@ -84,44 +85,66 @@ def _generate_image_bytes(prompt: str) -> bytes:
     raise RuntimeError("생성 결과에서 이미지를 찾지 못했습니다.")
 
 
-def comfyui_image_tool(guild_id: int, prefer_voice_channel: bool) -> Tool:
+class GenerateImageInput(BaseModel):
+    """generate_image 도구의 입력"""
+    prompt: str = Field(description="생성할 장면을 묘사하는 영어 프롬프트. 쉼표로 구분된 키워드 또는 짧은 문장.")
+    wait_message: str = Field(default="", description="이미지를 그리는 동안 채널에 먼저 보여줄 짧은 한국어 안내 문구. 평소 대화하던 말투로 작성한다. (예: 좋아, 잠깐만 기다려봐. 금방 그려올게.)")
+
+
+def comfyui_image_tool(guild_id: int, prefer_voice_channel: bool) -> StructuredTool:
     """ComfyUI로 이미지를 생성해 디스코드 채널에 올리는 LangChain 도구
 
+    먼저 대기 안내 문구를 채널에 보내두고, 생성이 끝나면 그 메시지를 수정해 이미지를 첨부합니다.
     prefer_voice_channel: 음성 대화용 에이전트면 True. 접속 중인 음성 채널의 채팅에 우선 전송합니다.
     """
 
-    def _generate(query: str) -> str:
-        prompt = (query or "").strip().strip("\"'")
+    def _generate(prompt: str, wait_message: str = "") -> str:
+        prompt = (prompt or "").strip().strip("\"'")
         if not prompt:
             return "생성할 이미지에 대한 영어 프롬프트를 입력해야 합니다."
         if not is_comfyui_enabled():
             return "이미지 생성 기능이 설정되어 있지 않습니다. (settings.toml의 [comfyui] url/checkpoint 필요)"
-        try:
-            image_bytes = _generate_image_bytes(prompt)
-        except requests.ConnectionError:
-            logging.error(f"[ComfyUI] 서버({config.comfyui_url})에 연결할 수 없어요.")
-            return "ComfyUI 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인이 필요하다고 사용자에게 알려주세요."
-        except Exception as e:
-            logging.error(f"[ComfyUI] 이미지 생성 중 오류 발생: {e}")
-            return f"이미지 생성에 실패했습니다: {e}"
 
         # 순환 임포트 방지를 위해 사용 직전에 임포트 (pipeline -> langchain_llm -> comfyui_image)
         from discord_interface import pipeline
 
+        # 1. 생성을 시작하기 전에 대기 안내 문구를 먼저 보냄 (생성이 끝나면 이 메시지를 수정해 이미지를 첨부)
+        wait_text = (wait_message or "").strip() or "잠깐만, 그림 그리는 중이야."
+        placeholder, note = pipeline.send_placeholder_message(guild_id, wait_text, prefer_voice_channel=prefer_voice_channel)
+        if placeholder is None:
+            return f"이미지를 보낼 채널을 찾지 못해 생성을 시작하지 않았습니다: {note}"
+
+        # 2. 이미지 생성
+        try:
+            image_bytes = _generate_image_bytes(prompt)
+        except requests.ConnectionError:
+            logging.error(f"[ComfyUI] 서버({config.comfyui_url})에 연결할 수 없어요.")
+            pipeline.edit_message_text(placeholder, "이미지 생성 서버에 연결하지 못했어요.")
+            return "ComfyUI 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인이 필요하다고 사용자에게 알려주세요."
+        except Exception as e:
+            logging.error(f"[ComfyUI] 이미지 생성 중 오류 발생: {e}")
+            pipeline.edit_message_text(placeholder, "그림을 그리다가 문제가 생겼어요.")
+            return f"이미지 생성에 실패했습니다: {e}"
+
+        # 3. 보내둔 안내 메시지를 수정해 이미지를 첨부
         filename = f"jia_{uuid.uuid4().hex[:8]}.png"
-        caption = prompt if len(prompt) <= 100 else prompt[:100] + "…"
-        ok, message = pipeline.send_image_to_guild(guild_id, image_bytes, filename, caption=caption, prefer_voice_channel=prefer_voice_channel)
+        ok, message = pipeline.edit_message_attach_image(placeholder, image_bytes, filename)
+        if not ok:
+            # 수정에 실패하면 새 메시지로 전송 시도
+            ok, message = pipeline.send_image_to_guild(guild_id, image_bytes, filename, prefer_voice_channel=prefer_voice_channel)
         if ok:
             return "이미지를 생성해서 채널에 올렸습니다. 사용자에게 이미지를 확인해보라고 자연스럽게 알려주세요."
         return f"이미지는 생성했지만 채널에 올리지 못했습니다: {message}"
 
-    return Tool(
-        name="generate_image",
+    return StructuredTool.from_function(
         func=_generate,
+        name="generate_image",
+        args_schema=GenerateImageInput,
         description=(
             "텍스트 프롬프트로 이미지를 생성해서 지금 대화 중인 디스코드 채널에 올립니다. "
             "사용자가 그림이나 이미지를 그려달라고 할 때 사용하세요. "
-            "입력은 생성할 장면을 묘사하는 영어 프롬프트여야 합니다. (쉼표로 구분된 키워드 또는 짧은 문장) "
-            "생성에는 시간이 다소 걸릴 수 있습니다."
+            "prompt에는 생성할 장면을 묘사하는 영어 프롬프트를, "
+            "wait_message에는 그리는 동안 채널에 먼저 보여줄 너의 말투의 짧은 한국어 안내 문구를 넣으세요. "
+            "안내 문구가 먼저 올라가고, 생성이 끝나면 그 메시지가 이미지로 바뀝니다."
         ),
     )
