@@ -18,6 +18,7 @@ AI bot that can chat and converse on Discord
 - 음성 채널이 한동안 조용하면 지아가 먼저 말을 걸어볼 수도 있어요. (기본은 꺼져 있고, `proactive_idle_sec` 설정으로 켤 수 있어요.)
 - (선택 기능) 로컬에서 ComfyUI를 사용하고 있다면, 지아에게 그림을 그려달라고 할 수 있어요! 생성된 이미지는 대화 중인 채널에 올라와요. (`settings.toml`의 `[comfyui]` 항목을 설정해야 해요. 설정하지 않으면 이 기능은 완전히 비활성화돼요.)
 - 이 모든걸 로컬 환경에서 작동할 수 있어요. 외부로의 데이터 이동이 없어 유출 걱정없이 사용할 수 있어요.
+- (선택) 원한다면 OpenAI·Anthropic 같은 외부 LLM API를 대신 사용할 수도 있어요. (`settings.toml`의 `[llm] provider`를 바꾸면 돼요. 다만 이 경우 대화 내용이 외부로 전송돼요.)
 
 <details>
   
@@ -153,8 +154,11 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[whisper]` `compute_type` | `float16` | Whisper 연산 정밀도 | 모델 자동 재로딩 |
 | `[whisper]` `beam_size` | `5` | STT beam size (클수록 정확하지만 느려요) | 즉시 |
 | `[tts]` `model` | (없음) | TTS(음성 합성) 모델 경로 | 모델 자동 재로딩 |
-| `[llm]` `model` | `gemma4:latest` | Ollama LLM 모델 | 모델 자동 재로딩 |
-| `[llm]` `num_ctx` | `16384` | LLM 컨텍스트 윈도우 크기(토큰) | 모델 자동 재로딩 |
+| `[llm]` `model` | `gemma4:latest` | LLM 모델 이름. `provider`가 `ollama`면 Ollama 모델, 외부 API면 그 API의 모델 이름 | 모델 자동 재로딩 |
+| `[llm]` `provider` | `ollama` | LLM 제공자. `ollama`(기본, 로컬) 또는 `openai`/`anthropic`/`google_genai`/`groq` 등. 아래 '외부 LLM API 사용' 항목 참고 | 모델 자동 재로딩 |
+| `[llm]` `api_key` | (없음) | 외부 LLM API 키. `provider`가 `ollama`가 아닐 때만 필요 | 모델 자동 재로딩 |
+| `[llm]` `api_base` | (없음) | 외부 LLM API 주소 재정의 (OpenAI 호환 서버 등, 선택) | 모델 자동 재로딩 |
+| `[llm]` `num_ctx` | `16384` | LLM 컨텍스트 윈도우 크기(토큰). `provider`가 `ollama`일 때만 적용 | 모델 자동 재로딩 |
 | `[llm]` `system_prompt` | (내장) | 지아의 성격/말투를 정의하는 시스템 프롬프트 | 모델 자동 재로딩 |
 | `[llm]` `tools` | DuckDuckGo 검색 | 연결할 MCP 서버 목록. 아래 'MCP 서버 연결' 항목 참고 | 즉시 (자동 재연결) |
 | `[llm]` `response_reserve_tokens` | `2048` | 컨텍스트 윈도우에서 응답 생성용으로 남겨둘 토큰 여유분 | 즉시 |
@@ -184,7 +188,26 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 > 프로그램을 업데이트해서 새 설정 항목이 생기면, 다음 실행 때 기본값이 `settings.toml`에 자동으로 채워져요. 직접 적어둔 주석과 키 순서는 그대로 보존돼요.
 
 > [!caution]
-> `settings.toml`에는 디스코드 봇 토큰이 들어 있으니 다른 사람과 공유하지 마세요.
+> `settings.toml`에는 디스코드 봇 토큰과 (사용하는 경우) 외부 LLM API 키가 들어 있으니 다른 사람과 공유하지 마세요.
+
+## 외부 LLM API 사용
+
+기본적으로 지아는 로컬 Ollama로 동작하지만, 원한다면 OpenAI·Anthropic 같은 외부 LLM API를 사용할 수도 있어요. `settings.toml`의 `[llm]` 항목에서 바꿀 수 있어요.
+
+```toml
+[llm]
+provider = "openai"        # ollama(기본) / openai / anthropic / google_genai / groq 등
+model = "gpt-4o-mini"      # 해당 제공자의 모델 이름
+api_key = "sk-..."         # 외부 API 키
+# api_base = "..."         # (선택) OpenAI 호환 서버 등 주소를 직접 지정할 때만
+```
+
+- 외부 제공자를 쓰려면 해당 langchain 통합 패키지를 먼저 설치해야 해요. 예: OpenAI는 `pip install langchain-openai`, Anthropic은 `pip install langchain-anthropic`. (설치가 안 되어 있으면 실행 시 어떤 패키지를 깔아야 하는지 안내해줘요.)
+- `api_key`는 비워두고 환경 변수(`OPENAI_API_KEY` 등)로 넣어도 돼요.
+- `provider`를 다시 `ollama`로 바꾸면 로컬 모델로 돌아가요. 이때는 `api_key`가 필요 없어요.
+
+> [!caution]
+> 외부 LLM API를 사용하면 대화 내용이 해당 업체의 서버로 전송돼요. "모든 처리가 로컬에서 이루어진다"는 장점은 이 경우 적용되지 않으니, 데이터 유출이 걱정된다면 기본값인 `ollama`를 사용하세요.
 
 ## MCP 서버 연결
 
@@ -245,13 +268,11 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 # 4. 변경 계획
 
 - [ ] TTS, STT 라이브러리를 선택할 수 있도록 수정할 예정입니다.
-- [ ] (가능하다면) LLM을 외부 API를 사용할 수 있도록 수정할 예정입니다.
+- [x] (가능하다면) LLM을 외부 API를 사용할 수 있도록 수정할 예정입니다.
 - [x] 설정과 관련된 수정을 할 예정입니다.
 - [x] /jia 또는 /지아 없이 대화할 수 있는 명령어를 추가할 예정입니다.
 - [x] 사운드보드를 추가할 예정입니다.
 - [x] 다인 대화에 최적화된 모습을 보여줄 수 있도록 수정할 예정입니다.
-- [x] 기억을 관리할 수 있는 시스템을 추가할 예정입니다.
-- [x] (선택 기능) 로컬 이미지 생성(ComfyUI) 기능을 추가할 예정입니다.
 
 
 # 5. 변경 내용
@@ -289,6 +310,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 23. 시간이 오래 걸리는 도구(인터넷 검색 등)를 사용할 때, 먼저 기다려 달라는 안내를 전달한 뒤 결과를 이어서 전달하도록 했습니다. ([음성]은 안내 음성으로, [채팅]은 안내 메시지로) 즉시 끝나는 도구에는 적용되지 않습니다.
 24. 연결할 MCP 서버를 `settings.toml`의 `[llm.tools]`에서 직접 지정할 수 있도록 했습니다. 저장하면 재시작 없이 자동으로 다시 연결되며, 자세한 형식은 [MCP 서버 연결](#mcp-서버-연결) 항목을 참고하세요.
 25. [음성] 음성 대화도 텍스트와 동일하게 MCP 도구를 사용하도록 통일하되, 지연을 줄이기 위해 음성에서는 정말 필요할 때만 도구를 쓰도록 안내합니다. (잡담이나 이미 아는 내용은 도구 없이 바로 응답하고, 최신 정보나 모르는 사실을 물을 때만 검색)
+26. LLM을 로컬 Ollama 대신 외부 API(OpenAI, Anthropic, Google 등)로도 사용할 수 있게 했습니다. `settings.toml`의 `[llm] provider`/`api_key`/`api_base`로 설정하며, 기본값은 로컬 `ollama`라 기존 사용자에게는 영향이 없습니다. 자세한 방법은 [외부 LLM API 사용](#외부-llm-api-사용) 항목을 참고하세요. (단, 외부 API 사용 시 대화 내용이 외부로 전송됩니다)
 
 ---
 

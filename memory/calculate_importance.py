@@ -1,7 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_ollama.chat_models import ChatOllama
+from LLM.LLM_model_control import create_chat_model
 from config.config_manager import config
 from memory.RAG import save_conversation, get_rag_instance
 import logging
@@ -28,7 +28,7 @@ def calculate_and_save_importance(user_name: str, guild_id: int, user_prompt: st
         return
 
     try:
-        llm = ChatOllama(model=config.llmModel)
+        llm = create_chat_model(for_agent=False)
         parser = PydanticOutputParser(pydantic_object=ConversationSummary)
 
         prompt_template = ChatPromptTemplate.from_messages([

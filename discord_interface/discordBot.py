@@ -143,11 +143,12 @@ def bot():
                 # MCP 서버 구성이 바뀌면 클라이언트를 다시 만듦 (에이전트 캐시는 아래 reload_llm이 비움)
                 from LLM.langchain_tools.mcp_manager import rebuild_client
                 rebuild_client()
-            if {"llmModel", "llmNumCtx", "llmSystemPrompt", "llm_tools"} & changed.keys():
+            if {"llmModel", "llmNumCtx", "llmSystemPrompt", "llm_tools",
+                "llm_provider", "llm_api_key", "llm_api_base"} & changed.keys():
                 reload_llm()
                 if "llmModel" in changed:
                     old_model, _ = changed["llmModel"]
-                    unload_ollama_model(old_model)  # 이전 모델을 Ollama 메모리에서 내림
+                    unload_ollama_model(old_model)  # 이전 모델을 Ollama 메모리에서 내림 (외부 API면 무시됨)
             elif {"comfyui_url", "comfyui_checkpoint"} & changed.keys():
                 # 이미지 생성 도구는 에이전트 생성 시점에 등록되므로 캐시를 비워 도구 목록을 다시 구성
                 reload_llm()

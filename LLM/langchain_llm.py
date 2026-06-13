@@ -1,5 +1,5 @@
 from config.config_manager import config
-from langchain_ollama.chat_models import ChatOllama
+from LLM.LLM_model_control import create_chat_model
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, trim_messages
@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-llm = ChatOllama(model=config.llmModel, keep_alive=-1, num_ctx=config.llmNumCtx)
+llm = create_chat_model()
 checkpointer = InMemorySaver()
 
 def get_memory_manager(guild_id: int) -> RAG:
@@ -145,7 +145,7 @@ def reload_llm():
     checkpointer는 유지되어 대화 기록은 보존됩니다.
     """
     global llm, sys_prompt, voice_sys_prompt
-    llm = ChatOllama(model=config.llmModel, keep_alive=-1, num_ctx=config.llmNumCtx)
+    llm = create_chat_model()
     sys_prompt = _build_sys_prompt()
     voice_sys_prompt = _build_voice_sys_prompt()
     callagents.clear()
