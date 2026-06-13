@@ -18,7 +18,7 @@ AI bot that can chat and converse on Discord
 - 음성 채널이 한동안 조용하면 지아가 먼저 말을 걸어볼 수도 있어요. (기본은 꺼져 있고, `proactive_idle_sec` 설정으로 켤 수 있어요.)
 - (선택 기능) 로컬에서 ComfyUI를 사용하고 있다면, 지아에게 그림을 그려달라고 할 수 있어요! 생성된 이미지는 대화 중인 채널에 올라와요. (`settings.toml`의 `[comfyui]` 항목을 설정해야 해요. 설정하지 않으면 이 기능은 완전히 비활성화돼요.)
 - 이 모든걸 로컬 환경에서 작동할 수 있어요. 외부로의 데이터 이동이 없어 유출 걱정없이 사용할 수 있어요.
-- (선택) 원한다면 OpenAI·Anthropic 같은 외부 LLM API를 대신 사용할 수도 있어요. (`settings.toml`의 `[llm] provider`를 바꾸면 돼요. 다만 이 경우 대화 내용이 외부로 전송돼요.)
+- (선택) 원한다면 OpenAI·Anthropic 같은 외부 LLM API나 Ollama Cloud를 대신 사용할 수도 있어요. (`settings.toml`의 `[llm]` 항목을 바꾸면 돼요. 다만 이 경우 대화 내용이 외부로 전송돼요.)
 
 <details>
   
@@ -156,8 +156,8 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[tts]` `model` | (없음) | TTS(음성 합성) 모델 경로 | 모델 자동 재로딩 |
 | `[llm]` `model` | `gemma4:latest` | LLM 모델 이름. `provider`가 `ollama`면 Ollama 모델, 외부 API면 그 API의 모델 이름 | 모델 자동 재로딩 |
 | `[llm]` `provider` | `ollama` | LLM 제공자. `ollama`(기본, 로컬) 또는 `openai`/`anthropic`/`google_genai`/`groq` 등. 아래 '외부 LLM API 사용' 항목 참고 | 모델 자동 재로딩 |
-| `[llm]` `api_key` | (없음) | 외부 LLM API 키. `provider`가 `ollama`가 아닐 때만 필요 | 모델 자동 재로딩 |
-| `[llm]` `api_base` | (없음) | LLM 서버/API 주소 재정의 (선택). `ollama`면 원격·다른 포트의 Ollama 서버 주소, 외부 API면 OpenAI 호환 서버 등 | 모델 자동 재로딩 |
+| `[llm]` `api_key` | (없음) | API 키. 외부 API 또는 Ollama Cloud 사용 시 입력. `provider=ollama`인데 키만 넣으면 Ollama Cloud로 연결돼요 | 모델 자동 재로딩 |
+| `[llm]` `api_base` | (없음) | LLM 서버/API 주소 재정의 (선택). `ollama`면 원격 Ollama 서버 주소, 외부 API면 OpenAI 호환 서버 등 | 모델 자동 재로딩 |
 | `[llm]` `num_ctx` | `16384` | LLM 컨텍스트 윈도우 크기(토큰). `provider`가 `ollama`일 때만 적용 | 모델 자동 재로딩 |
 | `[llm]` `system_prompt` | (내장) | 지아의 성격/말투를 정의하는 시스템 프롬프트 | 모델 자동 재로딩 |
 | `[llm]` `tools` | DuckDuckGo 검색 | 연결할 MCP 서버 목록. 아래 'MCP 서버 연결' 항목 참고 | 즉시 (자동 재연결) |
@@ -215,8 +215,17 @@ model = "gemma4:latest"
 api_base = "http://192.168.0.10:11434"   # 원격 Ollama 서버 주소
 ```
 
+[Ollama Cloud](https://docs.ollama.com/cloud)를 사용하면 강력한 로컬 GPU 없이도 큰 모델을 돌릴 수 있어요. `provider`는 `ollama`로 둔 채 `api_key`에 [Ollama API 키](https://ollama.com/settings/keys)를 넣으면 돼요. 주소는 자동으로 `https://ollama.com`에 연결돼요.
+
+```toml
+[llm]
+provider = "ollama"
+model = "gpt-oss:120b"   # Ollama Cloud 모델 이름
+api_key = "..."          # https://ollama.com/settings/keys 에서 발급
+```
+
 > [!caution]
-> 외부 LLM API를 사용하면 대화 내용이 해당 업체의 서버로 전송돼요. "모든 처리가 로컬에서 이루어진다"는 장점은 이 경우 적용되지 않으니, 데이터 유출이 걱정된다면 기본값인 `ollama`를 사용하세요.
+> 외부 LLM API나 Ollama Cloud를 사용하면 대화 내용이 해당 업체의 서버로 전송돼요. "모든 처리가 로컬에서 이루어진다"는 장점은 이 경우 적용되지 않으니, 데이터 유출이 걱정된다면 기본값인 로컬 `ollama`(키 없이)를 사용하세요.
 
 ## MCP 서버 연결
 
@@ -321,6 +330,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 25. [음성] 음성 대화도 텍스트와 동일하게 MCP 도구를 사용하도록 통일하되, 지연을 줄이기 위해 음성에서는 정말 필요할 때만 도구를 쓰도록 안내합니다. (잡담이나 이미 아는 내용은 도구 없이 바로 응답하고, 최신 정보나 모르는 사실을 물을 때만 검색)
 26. LLM을 로컬 Ollama 대신 외부 API(OpenAI, Anthropic, Google 등)로도 사용할 수 있게 했습니다. `settings.toml`의 `[llm] provider`/`api_key`/`api_base`로 설정하며, 기본값은 로컬 `ollama`라 기존 사용자에게는 영향이 없습니다. 자세한 방법은 [외부 LLM API 사용](#외부-llm-api-사용) 항목을 참고하세요. (단, 외부 API 사용 시 대화 내용이 외부로 전송됩니다)
 27. `provider`를 `ollama`로 둔 채 `[llm] api_base`에 주소를 적으면, 다른 컴퓨터나 다른 포트에서 돌아가는 원격 Ollama 서버에도 연결할 수 있습니다. 모델 로드/언로드도 해당 서버를 향합니다.
+28. Ollama Cloud(https://ollama.com)를 지원합니다. `provider`를 `ollama`로 둔 채 `[llm] api_key`에 Ollama API 키만 넣으면 자동으로 클라우드(`https://ollama.com`)에 Bearer 인증으로 연결되어, 강력한 로컬 GPU 없이도 큰 모델을 쓸 수 있습니다. (이 경우 모델 로드/언로드는 클라우드가 관리하므로 건너뜁니다)
 
 ---
 

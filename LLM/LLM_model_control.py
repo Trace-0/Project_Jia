@@ -25,33 +25,74 @@ def _provider() -> str:
     return (config.llm_provider or "ollama").strip().lower()
 
 
+# Ollama Cloud(https://ollama.com)의 기본 주소. provider=ollama인데 api_key가 있고
+# api_base를 지정하지 않으면 클라우드를 사용하는 것으로 보고 이 주소로 연결합니다.
+OLLAMA_CLOUD_URL = "https://ollama.com"
+
+
 def using_ollama() -> bool:
-    """Ollama를 사용 중인지 여부. (외부 API면 모델 로드/언로드가 필요 없음)"""
+    """Ollama(로컬/원격/클라우드)를 사용 중인지 여부."""
     return _provider() in ("", "ollama")
 
 
-def _ollama_client():
-    """Ollama 요청에 사용할 클라이언트를 반환합니다.
+def _ollama_authenticated() -> bool:
+    """인증이 필요한 Ollama(클라우드 또는 키로 보호된 원격 서버)인지 여부.
 
-    api_base가 설정돼 있으면 그 호스트(원격/다른 포트의 Ollama 서버)를 향하고,
-    비어 있으면 기본(localhost:11434) 클라이언트를 사용합니다. (module-level ollama)
+    이 경우 모델 로드/언로드는 서버가 관리하므로 로컬에서처럼 직접 하지 않습니다.
     """
+    return using_ollama() and bool((config.llm_api_key or "").strip())
+
+
+def _ollama_host() -> str:
+    """Ollama 연결 주소를 결정합니다. api_base가 있으면 그 주소, 없는데 키가 있으면 클라우드, 둘 다 없으면 빈 값(로컬 기본)."""
     host = (config.llm_api_base or "").strip()
-    return ollama.Client(host=host) if host else ollama
+    if host:
+        return host
+    if (config.llm_api_key or "").strip():
+        return OLLAMA_CLOUD_URL  # 키만 있으면 Ollama Cloud로 간주
+    return ""
+
+
+def _ollama_auth_headers() -> dict:
+    """Ollama 인증 헤더(Bearer)를 반환합니다. 키가 없으면 빈 dict."""
+    api_key = (config.llm_api_key or "").strip()
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
+def _ollama_client():
+    """Ollama 요청(로드/언로드)에 사용할 클라이언트를 반환합니다.
+
+    호스트(원격/클라우드)와 인증 헤더를 반영하며, 둘 다 없으면 기본(localhost) 클라이언트를 씁니다.
+    """
+    host = _ollama_host()
+    headers = _ollama_auth_headers()
+    if not host and not headers:
+        return ollama  # module-level 기본 클라이언트(localhost:11434)
+    client_kwargs = {}
+    if host:
+        client_kwargs["host"] = host
+    if headers:
+        client_kwargs["headers"] = headers
+    return ollama.Client(**client_kwargs)
 
 
 def create_chat_model(*, for_agent: bool = True):
     """설정에 맞는 LangChain 채팅 모델을 생성합니다.
 
     provider가 ollama면 ChatOllama를, 외부 API면 langchain의 init_chat_model로 해당 제공자 모델을 만듭니다.
-    ollama일 때 api_base가 설정돼 있으면 그 주소의 Ollama 서버(원격/다른 포트)에 연결합니다.
+    ollama일 때: api_base가 있으면 그 주소의 서버, 키만 있으면 Ollama Cloud(https://ollama.com),
+    둘 다 없으면 로컬(localhost)에 연결합니다. 키가 있으면 Authorization 헤더를 함께 보냅니다.
     for_agent: 대화 에이전트용이면 True (Ollama에서 keep_alive/num_ctx 적용). 단발성 요약 등은 False.
     """
     if using_ollama():
         kwargs = {"model": config.llmModel}
-        host = (config.llm_api_base or "").strip()
+        host = _ollama_host()
+        headers = _ollama_auth_headers()
         if host:
-            kwargs["base_url"] = host  # 원격/다른 포트의 Ollama 서버 주소
+            kwargs["base_url"] = host  # 원격 서버 또는 Ollama Cloud 주소
+        if headers:
+            # client_kwargs는 내부 ollama 클라이언트로 전달됨 (클라우드 Bearer 인증)
+            kwargs["client_kwargs"] = {"headers": headers}
         if for_agent:
             kwargs["keep_alive"] = -1
             kwargs["num_ctx"] = config.llmNumCtx
@@ -87,22 +128,24 @@ def create_chat_model(*, for_agent: bool = True):
 
 
 def unload_ollama_model(model_name: str):
-    """지정된 Ollama 모델을 메모리에서 언로드합니다. (외부 API 사용 중이면 아무 동작도 하지 않습니다.)
+    """지정된 Ollama 모델을 메모리에서 언로드합니다.
 
+    외부 API나 Ollama Cloud(인증 필요) 사용 중이면 서버가 모델을 관리하므로 아무 동작도 하지 않습니다.
     프롬프트 없는 빈 요청에 keep_alive=0을 설정하면 토큰 생성 없이 즉시 언로드됩니다.
     """
-    if not using_ollama():
+    if not using_ollama() or _ollama_authenticated():
         return
     logging.info(f"[LLM:Unload] \"{model_name}\" 모델 언로드 요청!")
     response = _ollama_client().generate(model=model_name, keep_alive=0)
     logging.info(f"[LLM:Unload] 응답 수신(done_reason={response.get('done_reason')}). 모델이 언로드됩니다.")
 
 def load_ollama_model(model_name: str):
-    """지정된 Ollama 모델을 메모리에 로드합니다. (외부 API 사용 중이면 아무 동작도 하지 않습니다.)
+    """지정된 Ollama 모델을 메모리에 로드합니다.
 
+    외부 API나 Ollama Cloud(인증 필요) 사용 중이면 서버가 모델을 관리하므로 아무 동작도 하지 않습니다.
     프롬프트 없는 빈 요청에 keep_alive=-1을 설정하면 토큰 생성 없이 로드만 수행됩니다.
     """
-    if not using_ollama():
+    if not using_ollama() or _ollama_authenticated():
         return
     logging.info(f"[LLM:Load] \"{model_name}\" 모델 로드 요청!")
     response = _ollama_client().generate(model=model_name, keep_alive=-1)

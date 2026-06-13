@@ -60,8 +60,8 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     "llm": {
         "llmModel": ("model", "LLM 모델 이름. provider가 ollama면 Ollama 모델, 외부 API면 그 API의 모델 이름 (변경 시 자동 재로딩)"),
         "llm_provider": ("provider", "LLM 제공자: ollama(기본, 로컬) 또는 openai/anthropic/google_genai/groq 등 외부 API (변경 시 자동 재로딩)"),
-        "llm_api_key": ("api_key", "외부 LLM API 키. provider가 ollama가 아닐 때만 필요 (비워두면 환경 변수에서 찾음)"),
-        "llm_api_base": ("api_base", "LLM 서버/API 주소 재정의 (선택). ollama면 원격·다른 포트의 Ollama 서버 주소, 외부 API면 OpenAI 호환 서버 등. 비우면 기본 주소 사용"),
+        "llm_api_key": ("api_key", "API 키. 외부 API 또는 Ollama Cloud 사용 시 입력. provider=ollama인데 키만 넣으면 Ollama Cloud(https://ollama.com)로 연결됨 (비우면 환경 변수에서 찾음)"),
+        "llm_api_base": ("api_base", "LLM 서버/API 주소 재정의 (선택). ollama면 원격 Ollama 서버 주소, 외부 API면 OpenAI 호환 서버 등. 비우면 기본 주소(로컬, 또는 키만 있으면 Ollama Cloud) 사용"),
         "llmNumCtx": ("num_ctx", "LLM 컨텍스트 윈도우 크기(토큰). 대화 기록도 이 크기에 맞춰 유지됨. provider가 ollama일 때만 적용 (변경 시 자동 재로딩)"),
         "llmSystemPrompt": ("system_prompt", "지아의 성격/말투를 정의하는 시스템 프롬프트 (변경 시 자동 재로딩)"),
         "llm_tools": ("tools", "연결할 MCP 서버 목록 (변경 시 자동 재연결). [llm.tools.서버이름] 테이블로 추가, 빈 테이블 {}이면 사용 안 함"),
