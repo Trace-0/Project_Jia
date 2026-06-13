@@ -156,6 +156,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[llm]` `model` | `gemma4:latest` | Ollama LLM 모델 | 모델 자동 재로딩 |
 | `[llm]` `num_ctx` | `16384` | LLM 컨텍스트 윈도우 크기(토큰) | 모델 자동 재로딩 |
 | `[llm]` `system_prompt` | (내장) | 지아의 성격/말투를 정의하는 시스템 프롬프트 | 모델 자동 재로딩 |
+| `[llm]` `tools` | DuckDuckGo 검색 | 연결할 MCP 서버 목록. 아래 'MCP 서버 연결' 항목 참고 | 즉시 (자동 재연결) |
 | `[llm]` `response_reserve_tokens` | `2048` | 컨텍스트 윈도우에서 응답 생성용으로 남겨둘 토큰 여유분 | 즉시 |
 | `[rag]` `embedding_model` | `dragonkue/BGE-m3-ko` | 기억 검색용 임베딩 모델 | 재시작 필요 |
 | `[rag]` `faiss_threshold` | `0.5` | 기억 검색 결과로 인정할 최소 유사도 점수 | 즉시 |
@@ -184,6 +185,27 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 
 > [!caution]
 > `settings.toml`에는 디스코드 봇 토큰이 들어 있으니 다른 사람과 공유하지 마세요.
+
+## MCP 서버 연결
+
+지아에게 MCP 서버를 연결해서 도구를 늘려줄 수 있어요. `settings.toml`에 `[llm.tools.서버이름]` 테이블을 추가하면 돼요. (형식은 langchain의 `MultiServerMCPClient`와 같아요)
+
+```toml
+# 기본으로 연결되는 DuckDuckGo 검색 MCP 서버 (stdio 방식)
+[llm.tools.ddg-search]
+command = "uvx"
+args = ["duckduckgo-mcp-server"]
+transport = "stdio"
+
+# 원격/로컬 HTTP 서버를 연결하는 예시
+[llm.tools.my-server]
+url = "http://localhost:9000/mcp"
+transport = "streamable_http"
+```
+
+- 저장하면 재시작 없이 자동으로 다시 연결돼요.
+- MCP를 아예 사용하지 않으려면 `tools = {}`로 적어주세요.
+- 서버 연결에 실패해도 지아의 대화는 정상 동작하고, 해당 도구만 빠져요.
 
 
 # 2-2. 사운드보드

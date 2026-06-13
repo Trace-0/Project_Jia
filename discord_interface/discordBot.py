@@ -139,7 +139,11 @@ def bot():
                 reload_whisper_model()
             if "tts_model" in changed:
                 reload_tts_model()
-            if {"llmModel", "llmNumCtx", "llmSystemPrompt"} & changed.keys():
+            if "llm_tools" in changed.keys():
+                # MCP 서버 구성이 바뀌면 클라이언트를 다시 만듦 (에이전트 캐시는 아래 reload_llm이 비움)
+                from LLM.langchain_tools.mcp_manager import rebuild_client
+                rebuild_client()
+            if {"llmModel", "llmNumCtx", "llmSystemPrompt", "llm_tools"} & changed.keys():
                 reload_llm()
                 if "llmModel" in changed:
                     old_model, _ = changed["llmModel"]

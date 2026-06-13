@@ -5,7 +5,7 @@ import threading
 import time
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Type, List
+from typing import Type
 import logging
 
 import tomlkit
@@ -17,6 +17,16 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 SETTINGS_PATH = ROOT_DIR / "settings.toml"
 ENV_PATH = ROOT_DIR / ".env"
 ENV_PREFIX = "JIA_"
+
+def DEFAULT_MCP_SERVERS() -> dict:
+    """기본으로 연결하는 MCP 서버 구성 (langchain-mcp-adapters의 MultiServerMCPClient 형식)"""
+    return {
+        "ddg-search": {
+            "command": "uvx",
+            "args": ["duckduckgo-mcp-server"],
+            "transport": "stdio",
+        }
+    }
 
 # Config 필드 -> settings.toml의 {섹션: {필드명: (키, 주석)}} 매핑
 TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
@@ -51,7 +61,7 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "llmModel": ("model", "Ollama LLM 모델 (변경 시 자동 재로딩)"),
         "llmNumCtx": ("num_ctx", "LLM 컨텍스트 윈도우 크기(토큰). 대화 기록도 이 크기에 맞춰 유지됨 (변경 시 자동 재로딩)"),
         "llmSystemPrompt": ("system_prompt", "지아의 성격/말투를 정의하는 시스템 프롬프트 (변경 시 자동 재로딩)"),
-        "llm_tools": ("tools", "추가 도구 목록 (현재 미사용)"),
+        "llm_tools": ("tools", "연결할 MCP 서버 목록 (변경 시 자동 재연결). [llm.tools.서버이름] 테이블로 추가, 빈 테이블 {}이면 사용 안 함"),
         "llm_response_reserve_tokens": ("response_reserve_tokens", "컨텍스트 윈도우에서 응답 생성을 위해 남겨둘 토큰 여유분"),
     },
     "rag": {
@@ -105,7 +115,7 @@ def _parse_env_value(raw: str, f) -> object:
     if f.type is int:
         return int(raw)
     if f.name == "llm_tools":
-        return json.loads(raw) if raw.strip() else []
+        return json.loads(raw) if raw.strip() else {}
     if f.name == "debug_text_channel":
         return int(raw) if raw.strip() else None
     return raw
@@ -115,14 +125,19 @@ def _coerce_toml_value(value, f) -> object:
     """settings.toml에서 읽은 값을 필드 타입에 맞게 변환합니다."""
     if f.name == "debug_text_channel":
         return int(value) or None  # 0은 미설정으로 취급
+    if f.name == "llm_tools":
+        plain = value.unwrap() if hasattr(value, "unwrap") else value
+        if isinstance(plain, dict):
+            return plain
+        # 구버전 형식(list, 미사용이었음)은 기본 MCP 서버 구성으로 대체
+        logging.info("[Config] [llm] tools가 구버전 형식(배열)이라 기본 MCP 서버 구성을 사용해요. [llm.tools.서버이름] 테이블로 바꿔 적어주세요.")
+        return DEFAULT_MCP_SERVERS()
     if f.type is bool:
         return bool(value)
     if f.type is float:
         return float(value)
     if f.type is int:
         return int(value)
-    if f.name == "llm_tools":
-        return [str(item) for item in value]
     return str(value)
 
 
@@ -145,7 +160,7 @@ class Config:
 - 사용자에게 짜증내거나 사용자의 말을 단순히 따라하지 마.
 
 사용자의 입력은 음성 인식을 거쳐 들어올 수 있어서 문장이 불완전할 수 있어. 어색한 부분은 문맥으로 추론해서 복원하고, 도저히 의도를 알 수 없을 때만 무슨 뜻인지 되물어봐. 그 외에는 사용자에게 굳이 질문을 던지는 응답은 피해줘."""
-    llm_tools: List[str] = field(default_factory=lambda: [])
+    llm_tools: dict = field(default_factory=DEFAULT_MCP_SERVERS)
     bot_token: str = ""
     debug_text_channel: int | None = None
 

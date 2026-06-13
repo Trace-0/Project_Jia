@@ -9,7 +9,7 @@ from langchain_core.tools import Tool
 from memory.RAG import RAG, get_rag_instance
 import logging
 from datetime import datetime
-from LLM.langchain_tools.mcp_manager import client
+from LLM.langchain_tools.mcp_manager import get_client
 from memory.calculate_importance import calculate_and_save_importance
 from LLM.langchain_tools.load_discord_message import load_discord_message_tool
 from LLM.langchain_tools.soundboard import soundboard_tool
@@ -138,11 +138,19 @@ def reload_llm():
     textagents.clear()
     logging.info(f"[LLM:Reloader] LLM({config.llmModel})과 시스템 프롬프트를 다시 불러왔어요.")
 
+def _get_mcp_tools() -> list:
+    """설정된 MCP 서버들의 도구 목록을 불러옵니다. 실패해도 대화가 막히지 않도록 빈 목록을 반환합니다."""
+    try:
+        return run_async(get_client().get_tools())
+    except Exception as e:
+        logging.error(f"[LLM:MCP] MCP 도구를 불러오지 못했어요. [llm] tools 설정과 서버 상태를 확인해주세요.\n   -> {e}")
+        return []
+
 def get_agent_for_guild(guild_id: int, is_text: bool):
     if is_text:
         if guild_id not in textagents:
             _time = time_tool()
-            tools = run_async(client.get_tools()) + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
+            tools = _get_mcp_tools() + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
             if is_comfyui_enabled():
                 tools.append(comfyui_image_tool(guild_id, prefer_voice_channel=False))
             react_agent = create_react_agent(
