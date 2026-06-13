@@ -26,20 +26,36 @@ def _provider() -> str:
 
 
 def using_ollama() -> bool:
-    """로컬 Ollama를 사용 중인지 여부. (외부 API면 모델 로드/언로드가 필요 없음)"""
+    """Ollama를 사용 중인지 여부. (외부 API면 모델 로드/언로드가 필요 없음)"""
     return _provider() in ("", "ollama")
+
+
+def _ollama_client():
+    """Ollama 요청에 사용할 클라이언트를 반환합니다.
+
+    api_base가 설정돼 있으면 그 호스트(원격/다른 포트의 Ollama 서버)를 향하고,
+    비어 있으면 기본(localhost:11434) 클라이언트를 사용합니다. (module-level ollama)
+    """
+    host = (config.llm_api_base or "").strip()
+    return ollama.Client(host=host) if host else ollama
 
 
 def create_chat_model(*, for_agent: bool = True):
     """설정에 맞는 LangChain 채팅 모델을 생성합니다.
 
     provider가 ollama면 ChatOllama를, 외부 API면 langchain의 init_chat_model로 해당 제공자 모델을 만듭니다.
+    ollama일 때 api_base가 설정돼 있으면 그 주소의 Ollama 서버(원격/다른 포트)에 연결합니다.
     for_agent: 대화 에이전트용이면 True (Ollama에서 keep_alive/num_ctx 적용). 단발성 요약 등은 False.
     """
     if using_ollama():
+        kwargs = {"model": config.llmModel}
+        host = (config.llm_api_base or "").strip()
+        if host:
+            kwargs["base_url"] = host  # 원격/다른 포트의 Ollama 서버 주소
         if for_agent:
-            return ChatOllama(model=config.llmModel, keep_alive=-1, num_ctx=config.llmNumCtx)
-        return ChatOllama(model=config.llmModel)
+            kwargs["keep_alive"] = -1
+            kwargs["num_ctx"] = config.llmNumCtx
+        return ChatOllama(**kwargs)
 
     provider = _provider()
     api_key = (config.llm_api_key or "").strip()
@@ -78,7 +94,7 @@ def unload_ollama_model(model_name: str):
     if not using_ollama():
         return
     logging.info(f"[LLM:Unload] \"{model_name}\" 모델 언로드 요청!")
-    response = ollama.generate(model=model_name, keep_alive=0)
+    response = _ollama_client().generate(model=model_name, keep_alive=0)
     logging.info(f"[LLM:Unload] 응답 수신(done_reason={response.get('done_reason')}). 모델이 언로드됩니다.")
 
 def load_ollama_model(model_name: str):
@@ -89,5 +105,5 @@ def load_ollama_model(model_name: str):
     if not using_ollama():
         return
     logging.info(f"[LLM:Load] \"{model_name}\" 모델 로드 요청!")
-    response = ollama.generate(model=model_name, keep_alive=-1)
+    response = _ollama_client().generate(model=model_name, keep_alive=-1)
     logging.info(f"[LLM:Load] 응답 수신(done_reason={response.get('done_reason')}). 모델이 메모리에 로드됩니다.")
