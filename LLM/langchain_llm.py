@@ -2,7 +2,6 @@ from config.config_manager import config
 from langchain_ollama.chat_models import ChatOllama
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
-from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, trim_messages
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.tools import Tool
@@ -62,7 +61,15 @@ def time_tool():
         description="현재 시간을 ISO 8601 형식으로 반환합니다. 시간 관련 정보가 필요하거나 사용자가 현재 시간을 물어볼 때 사용하세요."
     )
 
-calltool = [DuckDuckGoSearchResults()]
+# 음성 대화에서 외부 도구(MCP 등) 사용을 최대한 자제시키는 안내.
+# 음성은 지연에 민감하므로, 도구 호출로 응답이 느려지지 않도록 정말 필요할 때만 쓰게 합니다.
+VOICE_TOOL_RESTRAINT = """
+
+지금은 실시간 음성 대화 상황이야. 도구를 호출하면 응답이 느려져서 대화의 흐름이 끊기니, 도구는 정말 꼭 필요할 때만 써.
+- 네가 이미 알고 있는 내용이거나 잡담, 감상, 의견을 나누는 상황이라면 도구를 쓰지 말고 바로 네 지식으로 자연스럽게 대답해.
+- 최신 정보나 네가 확실히 모르는 사실을 사용자가 분명하게 물어볼 때만 인터넷 검색 같은 외부 도구를 써.
+- 과거 대화를 떠올려야 할 때(Conversation_Memory_Search)나 효과음/그림처럼 도구가 있어야만 가능한 동작은 평소대로 사용해도 괜찮아.
+망설여진다면 도구를 쓰지 않고 대답하는 쪽을 택해."""
 
 def _build_sys_prompt() -> str:
     prompt = config.llmSystemPrompt + """
@@ -76,7 +83,7 @@ def _build_sys_prompt() -> str:
 
 사용할 수 있는 도구:
 - Conversation_Memory_Search: 과거 대화 기록 검색. 여기에는 너가 모르는 대화 기록이 저장되어 있으니, 이전에 있었던 일을 떠올려야 한다면 반드시 호출해.
-- DuckDuckGoSearchResults: 인터넷 검색이 필요할 때 호출해.
+- 인터넷 검색 도구: 최신 정보나 네가 모르는 사실을 찾아야 할 때, 연결된 검색 도구를 호출해.
 - Current_Time: 응답에 현재 시간 정보가 필요할 때 호출해.
 - get_discord_message: 디스코드 채널의 메시지나 이미지를 불러올 때 호출해.
 - play_soundboard: 대화 상황에 어울리는 효과음을 음성 채널에서 재생할 때 호출해. 도구 설명에 있는 효과음만 재생할 수 있어."""
@@ -84,7 +91,12 @@ def _build_sys_prompt() -> str:
         prompt += "\n- generate_image: 사용자가 그림이나 이미지를 그려달라고 할 때 호출해. prompt에는 영어 프롬프트를, wait_message에는 그리는 동안 채널에 먼저 보여줄 짧은 안내 문구를 너의 말투로 넣어. 안내 문구가 먼저 올라가고 생성이 끝나면 그 메시지가 그림으로 바뀌니, 호출 결과를 받은 뒤에 그림이 완성됐다고 자연스럽게 알려주면 돼."
     return prompt
 
+def _build_voice_sys_prompt() -> str:
+    """음성 대화용 시스템 프롬프트. 공통 프롬프트에 도구 사용 자제 안내를 덧붙입니다."""
+    return _build_sys_prompt() + VOICE_TOOL_RESTRAINT
+
 sys_prompt = _build_sys_prompt()
+voice_sys_prompt = _build_voice_sys_prompt()
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -107,7 +119,8 @@ def pre_agent_hook(state):
     시스템 프롬프트와 응답 생성 여유분(llm_response_reserve_tokens)을 제외한 만큼만 기록을 유지하고,
     한도를 넘으면 오래된 메시지부터 제거합니다.
     """
-    budget = max(config.llmNumCtx - len(sys_prompt) - config.llm_response_reserve_tokens, 2048)
+    # 텍스트/음성 에이전트가 같은 훅을 공유하므로 더 긴 음성 프롬프트 기준으로 예산을 잡아 안전하게 자릅니다.
+    budget = max(config.llmNumCtx - len(voice_sys_prompt) - config.llm_response_reserve_tokens, 2048)
     trimmed_messages = trim_messages(
         state["messages"],
         max_tokens=budget,
@@ -131,9 +144,10 @@ def reload_llm():
     에이전트는 생성 시점의 llm/sys_prompt를 캡처하므로 캐시를 비워야 새 설정이 반영됩니다.
     checkpointer는 유지되어 대화 기록은 보존됩니다.
     """
-    global llm, sys_prompt
+    global llm, sys_prompt, voice_sys_prompt
     llm = ChatOllama(model=config.llmModel, keep_alive=-1, num_ctx=config.llmNumCtx)
     sys_prompt = _build_sys_prompt()
+    voice_sys_prompt = _build_voice_sys_prompt()
     callagents.clear()
     textagents.clear()
     logging.info(f"[LLM:Reloader] LLM({config.llmModel})과 시스템 프롬프트를 다시 불러왔어요.")
@@ -165,14 +179,15 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
     else:
         if guild_id not in callagents:
             _time = time_tool()
-            tools = calltool + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
+            # 음성도 텍스트와 동일하게 MCP 도구를 사용. 다만 voice_sys_prompt로 도구 사용을 자제시킴.
+            tools = _get_mcp_tools() + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
             if is_comfyui_enabled():
                 tools.append(comfyui_image_tool(guild_id, prefer_voice_channel=True))
             call_react_agent = create_react_agent(
                 model=llm,
                 tools=tools,
                 checkpointer=checkpointer,
-                prompt=sys_prompt,
+                prompt=voice_sys_prompt,
                 pre_model_hook=pre_agent_hook
             )
             callagents[guild_id] = call_react_agent
