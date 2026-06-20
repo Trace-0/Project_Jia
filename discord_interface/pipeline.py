@@ -14,6 +14,7 @@ import logging
 import torch
 import torchaudio
 import re
+from discord_interface.youtube_music import MusicTrack
 
 bot_instance = None
 
@@ -73,15 +74,25 @@ def play_sound_file(guild: int, file_path: str) -> tuple[bool, str]:
     return True, "효과음을 재생 큐에 추가했습니다."
 
 
-def play_music(guild: int, location: str, title: str = None) -> tuple[bool, str]:
-    """배경 음악을 재생합니다. TTS/효과음이 들어오면 믹서에서 자동으로 볼륨을 낮춥니다."""
+def play_music(guild: int, tracks: list[MusicTrack]) -> tuple[bool, str]:
+    """유튜브 음악 큐를 새로 재생합니다. TTS/효과음이 들어오면 믹서에서 자동으로 볼륨을 낮춥니다."""
     if not bot_instance or not bot_instance.audio_stream_manager:
         return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
     guild_obj = bot_instance.get_guild(guild)
     voice_client = guild_obj.voice_client if guild_obj else None
     if not voice_client or not voice_client.is_connected():
         return False, "지아가 음성 채널에 접속해 있지 않습니다."
-    return bot_instance.audio_stream_manager.start_music(guild, location, title=title)
+    return bot_instance.audio_stream_manager.start_music_tracks(guild, tracks)
+
+
+def queue_music(guild: int, tracks: list[MusicTrack]) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    guild_obj = bot_instance.get_guild(guild)
+    voice_client = guild_obj.voice_client if guild_obj else None
+    if not voice_client or not voice_client.is_connected():
+        return False, "지아가 음성 채널에 접속해 있지 않습니다."
+    return bot_instance.audio_stream_manager.queue_music_tracks(guild, tracks)
 
 
 def stop_music(guild: int) -> tuple[bool, str]:
@@ -106,6 +117,12 @@ def set_music_volume(guild: int, volume: float) -> tuple[bool, str]:
     if not bot_instance or not bot_instance.audio_stream_manager:
         return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
     return bot_instance.audio_stream_manager.set_music_volume(guild, volume)
+
+
+def skip_music(guild: int) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.skip_music(guild)
 
 
 def music_status(guild: int) -> str:

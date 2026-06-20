@@ -49,6 +49,7 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     "music": {
         "music_volume": ("volume", "음악 기본 볼륨 (0.0~1.0)"),
         "music_duck_volume": ("duck_volume", "지아가 말하거나 효과음을 재생할 때 낮출 음악 볼륨 (0.0~1.0)"),
+        "music_max_playlist_items": ("max_playlist_items", "유튜브 재생목록에서 한 번에 추가할 최대 곡 수"),
     },
     "vad": {
         "vad_threshold": ("threshold", "발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감)"),
@@ -192,6 +193,7 @@ class Config:
     # === 음악 재생/덕킹 (저장 즉시 반영) ===
     music_volume: float = 0.7
     music_duck_volume: float = 0.25
+    music_max_playlist_items: int = 50
 
     # === VAD (저장 즉시 반영) ===
     vad_threshold: float = 0.7

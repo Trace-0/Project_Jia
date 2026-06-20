@@ -16,6 +16,7 @@ from LLM.LLM_model_control import unload_ollama_model, load_ollama_model
 from collections import deque
 import uuid
 from discord_interface import pipeline
+from discord_interface.youtube_music import MusicTrack, build_music_queue, resolve_music_track
 
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
@@ -28,6 +29,8 @@ bot_client = None
 
 PCM_FRAME_BYTES = 3840  # 48kHz, 16-bit, stereo, 20ms
 PCM_SILENCE = b"\x00" * PCM_FRAME_BYTES
+MUSIC_FFMPEG_BEFORE_OPTIONS = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+MUSIC_FFMPEG_OPTIONS = "-vn"
 
 
 class MixedAudioSource(discord.AudioSource):
@@ -58,8 +61,11 @@ class AudioStreamManager:
         self._current_foreground: dict[int, discord.AudioSource | None] = {}
         self._music_sources: dict[int, discord.AudioSource] = {}
         self._music_titles: dict[int, str] = {}
+        self._music_queues: dict[int, deque[MusicTrack]] = {}
         self._music_volumes: dict[int, float] = {}
         self._music_paused: set[int] = set()
+        self._music_loading: set[int] = set()
+        self._music_generation: dict[int, int] = {}
         self._mixer_active: dict[int, bool] = {}
         self._lock = threading.RLock()
 
@@ -119,7 +125,7 @@ class AudioStreamManager:
         with self._lock:
             self._mixer_active[guild_id] = False
             self.playing[guild_id] = False
-            has_audio = self._has_foreground_locked(guild_id) or self._music_sources.get(guild_id) is not None
+            has_audio = self._has_foreground_locked(guild_id) or self._has_music_locked(guild_id)
         if has_audio and self.bot.loop and not self.bot.loop.is_closed():
             self.bot.loop.create_task(self.ensure_mixer(guild_id))
 
@@ -186,12 +192,10 @@ class AudioStreamManager:
                 music_frame = music.read()
                 if not music_frame:
                     self._cleanup_source(music)
-                    self._music_sources.pop(guild_id, None)
-                    self._music_titles.pop(guild_id, None)
-                    self._music_volumes.pop(guild_id, None)
-                    self._music_paused.discard(guild_id)
+                    self._clear_current_music_locked(guild_id)
+                    self._schedule_next_music(guild_id)
 
-            music_active = self._music_sources.get(guild_id) is not None
+            music_active = self._has_music_locked(guild_id)
             foreground_active = bool(foreground_frame) or self._has_foreground_locked(guild_id)
             if not foreground_frame and not music_frame and not music_active:
                 return b""
@@ -211,68 +215,199 @@ class AudioStreamManager:
             self.playing[guild_id] = False
             return count
 
-    def start_music(self, guild_id: int, location: str, title: str | None = None) -> tuple[bool, str]:
-        try:
-            source = discord.FFmpegPCMAudio(location)
-        except Exception as e:
-            return False, f"음악 소스를 만들지 못했습니다: {e}"
+    def _has_music_locked(self, guild_id: int) -> bool:
+        return (
+            self._music_sources.get(guild_id) is not None
+            or bool(self._music_queues.get(guild_id))
+            or guild_id in self._music_loading
+        )
+
+    def _clear_current_music_locked(self, guild_id: int):
+        self._music_sources.pop(guild_id, None)
+        self._music_titles.pop(guild_id, None)
+
+    def _next_music_generation_locked(self, guild_id: int) -> int:
+        generation = self._music_generation.get(guild_id, 0) + 1
+        self._music_generation[guild_id] = generation
+        return generation
+
+    def _schedule_next_music(self, guild_id: int):
+        if not self.bot.loop or self.bot.loop.is_closed():
+            return
         with self._lock:
+            if self._music_sources.get(guild_id) is not None:
+                return
+            if guild_id in self._music_loading or guild_id in self._music_paused:
+                return
+            if not self._music_queues.get(guild_id):
+                return
+            self._music_loading.add(guild_id)
+            generation = self._music_generation.get(guild_id, 0)
+        self.bot.loop.create_task(self._start_next_music_track(guild_id, generation))
+
+    async def _start_next_music_track(self, guild_id: int, generation: int):
+        with self._lock:
+            queue = self._music_queues.get(guild_id)
+            if (
+                self._music_generation.get(guild_id, 0) != generation
+                or self._music_sources.get(guild_id) is not None
+                or guild_id in self._music_paused
+                or not queue
+            ):
+                self._music_loading.discard(guild_id)
+                return
+            track = queue.popleft()
+
+        source = None
+        resolved_track = track
+        try:
+            loop = asyncio.get_running_loop()
+            resolved_track = await loop.run_in_executor(None, resolve_music_track, track)
+            source = discord.FFmpegPCMAudio(
+                resolved_track.stream_url,
+                before_options=MUSIC_FFMPEG_BEFORE_OPTIONS,
+                options=MUSIC_FFMPEG_OPTIONS,
+            )
+        except Exception as e:
+            logger.error(f"[Discord:Music] 다음 곡을 준비하지 못했어요: {track.title} / {e}")
+
+        should_schedule_next = False
+        with self._lock:
+            self._music_loading.discard(guild_id)
+            if self._music_generation.get(guild_id, 0) != generation:
+                if source:
+                    self._cleanup_source(source)
+                return
+            if source is None:
+                should_schedule_next = bool(self._music_queues.get(guild_id))
+            else:
+                self._music_sources[guild_id] = source
+                self._music_titles[guild_id] = resolved_track.title
+                self._music_volumes.setdefault(guild_id, max(0.0, min(1.0, config.music_volume)))
+
+        if source is None and should_schedule_next:
+            self._schedule_next_music(guild_id)
+        self._schedule_mixer(guild_id)
+
+    def start_music_tracks(self, guild_id: int, tracks: list[MusicTrack]) -> tuple[bool, str]:
+        if not tracks:
+            return False, "재생할 유튜브 음악을 찾지 못했습니다."
+
+        with self._lock:
+            self._next_music_generation_locked(guild_id)
             old_source = self._music_sources.pop(guild_id, None)
             if old_source:
                 self._cleanup_source(old_source)
-            self._music_sources[guild_id] = source
-            self._music_titles[guild_id] = title or location
+            self._music_titles.pop(guild_id, None)
+            self._music_queues[guild_id] = deque(tracks)
             self._music_volumes[guild_id] = max(0.0, min(1.0, config.music_volume))
             self._music_paused.discard(guild_id)
-        self._schedule_mixer(guild_id)
-        return True, f"음악 재생을 시작했어요: {title or location}"
+            self._music_loading.discard(guild_id)
+
+        self._schedule_next_music(guild_id)
+        first = tracks[0].title
+        if len(tracks) == 1:
+            return True, f"유튜브 음악 재생을 준비할게요: {first}"
+        return True, f"유튜브 재생목록 {len(tracks)}곡을 재생 큐에 넣었어요. 첫 곡: {first}"
+
+    def queue_music_tracks(self, guild_id: int, tracks: list[MusicTrack]) -> tuple[bool, str]:
+        if not tracks:
+            return False, "추가할 유튜브 음악을 찾지 못했습니다."
+
+        with self._lock:
+            if guild_id not in self._music_queues:
+                self._music_queues[guild_id] = deque()
+            self._music_queues[guild_id].extend(tracks)
+            self._music_volumes.setdefault(guild_id, max(0.0, min(1.0, config.music_volume)))
+            should_start = self._music_sources.get(guild_id) is None and guild_id not in self._music_loading
+
+        if should_start:
+            self._schedule_next_music(guild_id)
+        first = tracks[0].title
+        if len(tracks) == 1:
+            return True, f"대기열에 추가했어요: {first}"
+        return True, f"대기열에 {len(tracks)}곡을 추가했어요. 첫 곡: {first}"
 
     def stop_music(self, guild_id: int) -> tuple[bool, str]:
         with self._lock:
+            self._next_music_generation_locked(guild_id)
             source = self._music_sources.pop(guild_id, None)
             title = self._music_titles.pop(guild_id, None)
+            queued = len(self._music_queues.get(guild_id, ()))
+            loading = guild_id in self._music_loading
+            self._music_queues.pop(guild_id, None)
             self._music_volumes.pop(guild_id, None)
             self._music_paused.discard(guild_id)
-        if source is None:
+            self._music_loading.discard(guild_id)
+        if source is None and not queued and not loading:
             return False, "재생 중인 음악이 없습니다."
-        self._cleanup_source(source)
+        if source:
+            self._cleanup_source(source)
+        if queued or loading:
+            return True, f"음악을 멈췄어요. 대기열 {queued}곡도 비웠습니다."
         return True, f"음악을 멈췄어요: {title}"
 
     def pause_music(self, guild_id: int) -> tuple[bool, str]:
         with self._lock:
-            if guild_id not in self._music_sources:
+            if not self._has_music_locked(guild_id):
                 return False, "재생 중인 음악이 없습니다."
             self._music_paused.add(guild_id)
         return True, "음악을 일시정지했어요."
 
     def resume_music(self, guild_id: int) -> tuple[bool, str]:
         with self._lock:
-            if guild_id not in self._music_sources:
+            if not self._has_music_locked(guild_id):
                 return False, "재생 중인 음악이 없습니다."
             self._music_paused.discard(guild_id)
+            should_start = self._music_sources.get(guild_id) is None
+        if should_start:
+            self._schedule_next_music(guild_id)
         self._schedule_mixer(guild_id)
         return True, "음악을 다시 재생할게요."
 
     def set_music_volume(self, guild_id: int, volume: float) -> tuple[bool, str]:
         volume = max(0.0, min(1.0, volume))
         with self._lock:
-            if guild_id not in self._music_sources:
+            if not self._has_music_locked(guild_id):
                 return False, "재생 중인 음악이 없습니다."
             self._music_volumes[guild_id] = volume
         return True, f"음악 볼륨을 {volume:.2f}로 설정했어요."
 
+    def skip_music(self, guild_id: int) -> tuple[bool, str]:
+        with self._lock:
+            if not self._has_music_locked(guild_id):
+                return False, "재생 중인 음악이 없습니다."
+            self._next_music_generation_locked(guild_id)
+            source = self._music_sources.pop(guild_id, None)
+            title = self._music_titles.pop(guild_id, None)
+            self._music_loading.discard(guild_id)
+            has_next = bool(self._music_queues.get(guild_id))
+        if source:
+            self._cleanup_source(source)
+        if has_next:
+            self._schedule_next_music(guild_id)
+            return True, f"현재 곡을 건너뛰었어요: {title or '준비 중인 곡'}"
+        return True, f"현재 곡을 건너뛰었어요. 남은 대기열은 없습니다: {title or '준비 중인 곡'}"
+
     def music_status(self, guild_id: int) -> str:
         with self._lock:
             title = self._music_titles.get(guild_id)
+            queued = len(self._music_queues.get(guild_id, ()))
+            loading = guild_id in self._music_loading
+            if not title and loading:
+                return f"다음 유튜브 음악을 준비 중입니다. (대기열 {queued}곡)"
+            if not title and queued:
+                state = "일시정지" if guild_id in self._music_paused else "대기 중"
+                return f"유튜브 음악 {state}입니다. (대기열 {queued}곡)"
             if not title:
                 return "재생 중인 음악이 없습니다."
             state = "일시정지" if guild_id in self._music_paused else "재생 중"
             volume = self._music_volumes.get(guild_id, config.music_volume)
-        return f"음악 {state}: {title} (볼륨 {volume:.2f}, 말할 때 {config.music_duck_volume:.2f})"
+        return f"음악 {state}: {title} (대기열 {queued}곡, 볼륨 {volume:.2f}, 말할 때 {config.music_duck_volume:.2f})"
 
     def has_music(self, guild_id: int) -> bool:
         with self._lock:
-            return guild_id in self._music_sources
+            return self._has_music_locked(guild_id)
 
     def stop_all(self, guild_id: int):
         self.stop_foreground(guild_id)
@@ -765,18 +900,24 @@ def bot():
                 return
 
             try:
-                if action == "play":
-                    location = arg.strip().strip("\"'")
-                    if not location:
-                        await ctx.send("재생할 파일 경로나 URL을 입력해주세요. 예) `/jiamusic play C:\\Music\\song.mp3`")
+                if action in {"play", "queue", "add"}:
+                    query = arg.strip().strip("\"'")
+                    if not query:
+                        await ctx.send("유튜브 URL, 재생목록 URL, 또는 검색어를 입력해주세요. 예) `/jiamusic play lofi hip hop radio`")
                         return
-                    is_url = location.startswith("http://") or location.startswith("https://")
-                    if not is_url and not os.path.isfile(location):
-                        await ctx.send("지정한 파일이 존재하지 않아요")
+                    await ctx.send("유튜브 음악 정보를 불러오는 중이에요...")
+                    try:
+                        max_items = max(1, int(config.music_max_playlist_items))
+                        tracks = await asyncio.to_thread(build_music_queue, query, max_items)
+                    except Exception as e:
+                        await ctx.send(f"유튜브 음악 정보를 불러오지 못했어요: {e}")
                         if bot.def_channel:
-                            await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음악 재생 실패 (파일이 존재하지 않음)")
+                            await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 유튜브 음악 정보 로딩 실패 ({e})")
                         return
-                    ok, message = pipeline.play_music(ctx.guild.id, location, title=os.path.basename(location) if not is_url else location)
+                    if action == "play":
+                        ok, message = pipeline.play_music(ctx.guild.id, tracks)
+                    else:
+                        ok, message = pipeline.queue_music(ctx.guild.id, tracks)
                     await ctx.send(message)
                     if not ok and bot.def_channel:
                         await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음악 재생 실패 ({message})")
@@ -791,6 +932,10 @@ def bot():
 
                 elif action == "resume":
                     ok, message = pipeline.resume_music(ctx.guild.id)
+                    await ctx.send(message)
+
+                elif action == "skip":
+                    ok, message = pipeline.skip_music(ctx.guild.id)
                     await ctx.send(message)
 
                 elif action == "volume":
@@ -808,8 +953,10 @@ def bot():
                 else:
                     await ctx.send(
                         "**/jiamusic 사용법**\n"
-                        "`/jiamusic play <파일경로 또는 URL>` — 배경 음악을 재생해요\n"
+                        "`/jiamusic play <유튜브 URL/재생목록/검색어>` — 기존 대기열을 바꾸고 재생해요\n"
+                        "`/jiamusic queue <유튜브 URL/재생목록/검색어>` — 현재 대기열 뒤에 추가해요\n"
                         "`/jiamusic stop` — 배경 음악을 멈춰요\n"
+                        "`/jiamusic skip` — 현재 곡을 건너뛰어요\n"
                         "`/jiamusic pause` — 배경 음악을 일시정지해요\n"
                         "`/jiamusic resume` — 배경 음악을 다시 재생해요\n"
                         "`/jiamusic volume <0.0~1.0>` — 음악 볼륨을 조절해요\n"
