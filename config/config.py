@@ -51,6 +51,15 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "music_duck_volume": ("duck_volume", "지아가 말하거나 효과음을 재생할 때 낮출 음악 볼륨 (0.0~1.0)"),
         "music_max_playlist_items": ("max_playlist_items", "유튜브 재생목록에서 한 번에 추가할 최대 곡 수"),
     },
+    "security": {
+        "allow_unsafe_jiaplay": (
+            "allow_unsafe_jiaplay",
+            "위험 기능: /jiaplay 로컬 파일 재생을 허용합니다.\n"
+            "이 값을 true로 바꾸면 Discord 명령을 입력할 수 있는 사람이 봇 PC에서 봇 프로세스 권한으로 읽을 수 있는 로컬 오디오 파일 경로를 지정할 수 있습니다.\n"
+            "사적인 오디오가 음성 채널에 노출될 수 있고, 큰 파일을 메모리에 읽어 봇이 느려지거나 중단될 수 있으며, 신뢰할 수 없는 미디어를 FFmpeg가 해석하면서 디코더 취약점이나 비정상 파일 오류에 노출될 수 있습니다.\n"
+            "개인 서버나 완전히 신뢰하는 사용자만 명령을 사용할 수 있는 환경에서만 true로 바꾸세요. 일반 음악 재생은 /jiamusic을 권장합니다.",
+        ),
+    },
     "vad": {
         "vad_threshold": ("threshold", "발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감)"),
         "vad_min_speech_ms": ("min_speech_ms", "이보다 짧은 발화 구간은 무시 (ms)"),
@@ -194,6 +203,9 @@ class Config:
     music_volume: float = 0.7
     music_duck_volume: float = 0.25
     music_max_playlist_items: int = 50
+
+    # === 위험 기능 (저장 즉시 반영) ===
+    allow_unsafe_jiaplay: bool = False
 
     # === VAD (저장 즉시 반영) ===
     vad_threshold: float = 0.7
@@ -352,7 +364,12 @@ class Config:
                 plain, item = self._toml_item(field_name)
                 if key not in table:
                     if comment:
-                        item.comment(comment)
+                        comment_lines = comment.splitlines()
+                        if len(comment_lines) == 1:
+                            item.comment(comment)
+                        else:
+                            for line in comment_lines:
+                                table.add(tomlkit.comment(line))
                     table[key] = item
                 elif table[key] != plain:
                     # 값이 바뀐 키만 갱신 (사용자가 직접 단 주석을 최대한 보존)

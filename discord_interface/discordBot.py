@@ -866,6 +866,14 @@ def bot():
 
         @bot.command(name="jiaplay", description="지아가 음성 채널에서 오디오 파일을 재생해요")
         async def jiaplay(ctx, file_path: str):
+            if not config.allow_unsafe_jiaplay:
+                await ctx.send(
+                    "`/jiaplay`은 보안 문제로 차단되어 있어요. "
+                    "`settings.toml`의 `[security] allow_unsafe_jiaplay` 설정에서 바꿀 수 있어요."
+                )
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 재생 차단 (/jiaplay 비활성화)")
+                return
             voice_client = ctx.voice_client
             if not isinstance(voice_client, discord.VoiceClient):
                 await ctx.send("먼저 지아를 음성 채널에 초대해주세요")
