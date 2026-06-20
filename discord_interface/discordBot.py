@@ -1043,6 +1043,13 @@ def bot():
                         lines.append(f"`{mem_id[:8]}` [{timestamp[:16]}] ({username}, 중요도 {importance:.2f})\n　{summary_short}")
                     return "\n".join(lines)
 
+                def is_memory_admin() -> bool:
+                    permissions = getattr(ctx.author, "guild_permissions", None)
+                    return bool(
+                        getattr(permissions, "administrator", False)
+                        or getattr(permissions, "manage_guild", False)
+                    )
+
                 if action == "list":
                     page = int(arg) if arg.isdigit() else 1
                     total = rag.count_memories()
@@ -1083,6 +1090,9 @@ def bot():
                         await ctx.send("해당 ID로 시작하는 기억을 찾지 못했어요.")
 
                 elif action == "profile":
+                    if not is_memory_admin():
+                        await ctx.send("`/jiamemory profile`은 서버 관리자만 사용할 수 있어요. 내 기억 상태와 프로필은 `/jiamemory status`에서 확인할 수 있어요.")
+                        return
                     name = arg or ctx.author.name
                     facts = rag.get_profile_facts(name)
                     if not facts:
@@ -1115,7 +1125,17 @@ def bot():
                     facts = rag.get_profile_facts(ctx.author.name)
                     total = rag.count_memories()
                     state = "기억 안 함 (opt-out)" if opted_out else "기억 중"
-                    await ctx.send(f"**{ctx.author.name}님의 기억 설정**\n- 상태: {state}\n- 프로필에 저장된 사실: {len(facts)}개\n- 이 서버의 전체 기억: {total}개")
+                    if facts:
+                        profile_text = "\n".join(f"- {fact}" for fact in facts)
+                    else:
+                        profile_text = "- 따로 저장된 프로필 사실이 없어요."
+                    await ctx.send(
+                        f"**{ctx.author.name}님의 기억 설정**\n"
+                        f"- 상태: {state}\n"
+                        f"- 프로필에 저장된 사실: {len(facts)}개\n"
+                        f"- 이 서버의 전체 기억: {total}개\n\n"
+                        f"**내 프로필**\n{profile_text}"
+                    )
 
                 else:
                     await ctx.send(
@@ -1123,10 +1143,10 @@ def bot():
                         "`/jiamemory list [페이지]` — 이 서버의 기억을 최신순으로 보여줘요\n"
                         "`/jiamemory search <검색어>` — 기억을 검색해요\n"
                         "`/jiamemory delete <ID>` — 해당 ID로 시작하는 기억을 삭제해요\n"
-                        "`/jiamemory profile [이름]` — 사용자에 대해 기억하는 정보를 보여줘요 (생략 시 본인)\n"
+                        "`/jiamemory profile [이름]` — 사용자에 대해 기억하는 정보를 보여줘요 (관리자 전용)\n"
                         "`/jiamemory optout` — 내 대화와 정보를 기억하지 않게 해요 (기존 프로필/단독 기억도 삭제)\n"
                         "`/jiamemory optin` — 기억 기능을 다시 켜요\n"
-                        "`/jiamemory status` — 내 기억 설정 상태를 확인해요"
+                        "`/jiamemory status` — 내 기억 설정 상태와 프로필을 확인해요"
                     )
             except Exception as e:
                 await ctx.send(f"기억 관리 중 오류 발생: {e}")
