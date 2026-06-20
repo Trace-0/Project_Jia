@@ -72,6 +72,54 @@ def play_sound_file(guild: int, file_path: str) -> tuple[bool, str]:
         return False, "봇의 이벤트 루프가 닫혀 재생할 수 없습니다."
     return True, "효과음을 재생 큐에 추가했습니다."
 
+
+def play_music(guild: int, location: str, title: str = None) -> tuple[bool, str]:
+    """배경 음악을 재생합니다. TTS/효과음이 들어오면 믹서에서 자동으로 볼륨을 낮춥니다."""
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    guild_obj = bot_instance.get_guild(guild)
+    voice_client = guild_obj.voice_client if guild_obj else None
+    if not voice_client or not voice_client.is_connected():
+        return False, "지아가 음성 채널에 접속해 있지 않습니다."
+    return bot_instance.audio_stream_manager.start_music(guild, location, title=title)
+
+
+def stop_music(guild: int) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.stop_music(guild)
+
+
+def pause_music(guild: int) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.pause_music(guild)
+
+
+def resume_music(guild: int) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.resume_music(guild)
+
+
+def set_music_volume(guild: int, volume: float) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.set_music_volume(guild, volume)
+
+
+def music_status(guild: int) -> str:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.music_status(guild)
+
+
+def stop_foreground_audio(guild: int) -> int:
+    """TTS/효과음 foreground 큐만 비웁니다. 배경 음악은 유지합니다."""
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return 0
+    return bot_instance.audio_stream_manager.stop_foreground(guild)
+
 # 길드별로 마지막 텍스트 대화(/jia, autotalk)가 오간 채널. 생성된 이미지를 보낼 곳을 정할 때 사용합니다.
 _active_text_channels: dict[int, int] = {}
 

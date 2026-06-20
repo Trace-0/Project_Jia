@@ -17,6 +17,7 @@ AI bot that can chat and converse on Discord
 - 기억되는 게 싫다면 `/jiamemory optout`으로 거부할 수 있어요. 거부한 사용자는 대화 기록과 프로필 저장에서 제외돼요.
 - 음성 채널이 한동안 조용하면 지아가 먼저 말을 걸어볼 수도 있어요. (기본은 꺼져 있고, `proactive_idle_sec` 설정으로 켤 수 있어요.)
 - 사운드보드 효과음을 대화 상황에 맞춰 직접 고르거나, 설정에 따라 자동으로 짧게 반응하게 할 수 있어요.
+- 음성 채널에서 배경 음악을 재생하고, 지아가 말할 때는 음악 볼륨을 자동으로 낮출 수 있어요.
 - (선택 기능) 로컬에서 ComfyUI를 사용하고 있다면, 지아에게 그림을 그려달라고 할 수 있어요! 상황별 모델 프로필을 등록해두면 그림 종류에 맞는 모델을 골라 사용할 수 있어요. (`settings.toml`의 `[comfyui]` 항목을 설정해야 해요. 설정하지 않으면 이 기능은 완전히 비활성화돼요.)
 - 이 모든걸 로컬 환경에서 작동할 수 있어요. 외부로의 데이터 이동이 없어 유출 걱정없이 사용할 수 있어요.
 - (선택) 원한다면 OpenAI·Anthropic 같은 외부 LLM API나 Ollama Cloud를 대신 사용할 수도 있어요. (`settings.toml`의 `[llm]` 항목을 바꾸면 돼요. 다만 이 경우 대화 내용이 외부로 전송돼요.)
@@ -118,6 +119,9 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `/jiajoinnoagent` | 지아가 통화방에 들어와요. 하지만, 아무 기능도 작동하지 않아요. |
 | `/jiatalk` | 해당 채널에서 작성하는 모든 대화는 지아가 대답해줘요. 이제 `/jia`나 `/지아`를 입력하지 않아도 괜찮아요. |
 | `/jiastoptalk` | `/jiatalk` 기능을 멈춰요. |
+| `/jiamusic play <파일경로 또는 URL>` | 배경 음악을 재생해요. 지아가 말할 때는 자동으로 음악 볼륨이 낮아져요. |
+| `/jiamusic stop/pause/resume/status` | 배경 음악을 멈추거나 일시정지/재개하고 상태를 확인해요. |
+| `/jiamusic volume <0.0~1.0>` | 배경 음악 볼륨을 조절해요. |
 | `/jiarestart` | 지아가 재시작돼요. 재시작이 필요한 설정을 바꿨을 때 사용해요. |
 | `/jiamemory list (페이지)` | 이 서버에 저장된 기억을 최신순으로 보여줘요. |
 | `/jiamemory search [검색어]` | 저장된 기억을 유사도로 검색해요. |
@@ -148,6 +152,8 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[soundboard]` `auto_react` | `false` | 대화 상황에 맞는 효과음을 자동으로 재생할지 여부 | 즉시 |
 | `[soundboard]` `auto_react_cooldown_sec` | `20` | 같은 효과음이 자동으로 다시 재생되기까지의 최소 간격 | 즉시 |
 | `[soundboard]` `auto_react_chance` | `0.35` | 자동 반응 후보가 잡혔을 때 실제로 재생할 확률 | 즉시 |
+| `[music]` `volume` | `0.7` | 배경 음악 기본 볼륨 | 즉시 |
+| `[music]` `duck_volume` | `0.25` | 지아가 말하거나 효과음이 재생될 때 낮출 음악 볼륨 | 즉시 |
 | `[vad]` `threshold` | `0.7` | 발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감) | 즉시 |
 | `[vad]` `min_speech_ms` | `150` | 이보다 짧은 발화 구간은 무시해요 | 즉시 |
 | `[vad]` `min_silence_ms` | `1000` | 발화 구간 분리에 필요한 최소 무음 시간 | 즉시 |
@@ -338,6 +344,26 @@ auto_react_chance = 0.35
 > 파일을 새로 넣으면 다음 도구 호출 때 바로 재생할 수 있지만, 지아가 효과음 목록을 새로 인지하게 하려면 `/jiareload`를 한 번 실행해주는 것이 좋아요.
 
 
+# 2-4. 배경 음악과 덕킹
+
+`/jiamusic` 명령어로 음성 채널에 배경 음악을 틀 수 있어요. 음악이 재생되는 동안 지아가 TTS로 대답하거나 사운드보드 효과음을 재생하면, 음악 볼륨이 자동으로 `[music] duck_volume`까지 낮아지고 foreground 재생이 끝나면 원래 볼륨으로 돌아갑니다.
+
+```text
+/jiamusic play C:\Music\song.mp3
+/jiamusic play https://example.com/stream.mp3
+/jiamusic volume 0.6
+/jiamusic pause
+/jiamusic resume
+/jiamusic stop
+/jiamusic status
+```
+
+음악과 지아의 목소리는 내부 오디오 믹서에서 함께 PCM으로 합쳐져 Discord에 전송돼요. 그래서 음악이 흐르는 중에도 대화 응답이 큐에 막히지 않고, 지아가 말할 때 음악이 작아지는 라디오 진행자 같은 동작을 할 수 있어요.
+
+> [!note]
+> `/jiastop`은 지아의 TTS와 효과음 같은 foreground 재생만 멈춰요. 배경 음악을 멈추려면 `/jiamusic stop`을 사용해주세요.
+
+
 # 3. 현재 발견된 문제
 
 마이크가 항상 열려있는 사용자는 지연 시간 문제로 음성을 처리하지 않는 문제
@@ -399,6 +425,8 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 28. Ollama Cloud(https://ollama.com)를 지원합니다. `provider`를 `ollama`로 둔 채 `[llm] api_key`에 Ollama API 키만 넣으면 자동으로 클라우드(`https://ollama.com`)에 Bearer 인증으로 연결되어, 강력한 로컬 GPU 없이도 큰 모델을 쓸 수 있습니다. (이 경우 모델 로드/언로드는 클라우드가 관리하므로 건너뜁니다)
 29. 사운드보드 자동 반응 기능을 추가했습니다. `[soundboard] auto_react`를 켜면 대화 문맥과 `sounds.toml`의 태그를 바탕으로 효과음을 짧게 자동 재생하며, 효과음별 `cooldown`, `chance`, `auto` 설정으로 과한 재생을 막을 수 있습니다.
 30. ComfyUI 이미지 생성에서 상황별 모델 프로필을 지원합니다. `[comfyui.models.<ID>]`에 체크포인트와 `use_when`/`tags`를 등록하면 지아가 이미지 종류에 맞는 `model_id`를 선택해 생성합니다.
+31. [음성] 배경 음악 재생 명령어 `/jiamusic`를 추가했습니다. 파일 경로나 URL을 재생할 수 있고, stop/pause/resume/volume/status 제어를 지원합니다.
+32. [음성] 오디오 믹서를 추가해 배경 음악과 TTS/효과음을 함께 출력합니다. 지아가 말하거나 효과음을 재생하는 동안 음악 볼륨을 `[music] duck_volume`으로 낮추고, 끝나면 기존 음악 볼륨으로 복구합니다.
 
 ---
 

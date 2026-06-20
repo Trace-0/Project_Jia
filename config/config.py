@@ -46,6 +46,10 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "soundboard_auto_react_cooldown_sec": ("auto_react_cooldown_sec", "같은 효과음 자동 재생 사이 최소 간격 (초)"),
         "soundboard_auto_react_chance": ("auto_react_chance", "자동 반응 후보가 잡혔을 때 실제로 재생할 확률 (0.0~1.0)"),
     },
+    "music": {
+        "music_volume": ("volume", "음악 기본 볼륨 (0.0~1.0)"),
+        "music_duck_volume": ("duck_volume", "지아가 말하거나 효과음을 재생할 때 낮출 음악 볼륨 (0.0~1.0)"),
+    },
     "vad": {
         "vad_threshold": ("threshold", "발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감)"),
         "vad_min_speech_ms": ("min_speech_ms", "이보다 짧은 발화 구간은 무시 (ms)"),
@@ -184,6 +188,10 @@ class Config:
     soundboard_auto_react: bool = False
     soundboard_auto_react_cooldown_sec: int = 20
     soundboard_auto_react_chance: float = 0.35
+
+    # === 음악 재생/덕킹 (저장 즉시 반영) ===
+    music_volume: float = 0.7
+    music_duck_volume: float = 0.25
 
     # === VAD (저장 즉시 반영) ===
     vad_threshold: float = 0.7
