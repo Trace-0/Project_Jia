@@ -16,7 +16,8 @@ AI bot that can chat and converse on Discord
 - 대화하면서 알게 된 여러분에 대한 사실(취향, 관계 등)을 사람별로 기억해요. (`/jiamemory profile`로 확인할 수 있어요.)
 - 기억되는 게 싫다면 `/jiamemory optout`으로 거부할 수 있어요. 거부한 사용자는 대화 기록과 프로필 저장에서 제외돼요.
 - 음성 채널이 한동안 조용하면 지아가 먼저 말을 걸어볼 수도 있어요. (기본은 꺼져 있고, `proactive_idle_sec` 설정으로 켤 수 있어요.)
-- (선택 기능) 로컬에서 ComfyUI를 사용하고 있다면, 지아에게 그림을 그려달라고 할 수 있어요! 생성된 이미지는 대화 중인 채널에 올라와요. (`settings.toml`의 `[comfyui]` 항목을 설정해야 해요. 설정하지 않으면 이 기능은 완전히 비활성화돼요.)
+- 사운드보드 효과음을 대화 상황에 맞춰 직접 고르거나, 설정에 따라 자동으로 짧게 반응하게 할 수 있어요.
+- (선택 기능) 로컬에서 ComfyUI를 사용하고 있다면, 지아에게 그림을 그려달라고 할 수 있어요! 상황별 모델 프로필을 등록해두면 그림 종류에 맞는 모델을 골라 사용할 수 있어요. (`settings.toml`의 `[comfyui]` 항목을 설정해야 해요. 설정하지 않으면 이 기능은 완전히 비활성화돼요.)
 - 이 모든걸 로컬 환경에서 작동할 수 있어요. 외부로의 데이터 이동이 없어 유출 걱정없이 사용할 수 있어요.
 - (선택) 원한다면 OpenAI·Anthropic 같은 외부 LLM API나 Ollama Cloud를 대신 사용할 수도 있어요. (`settings.toml`의 `[llm]` 항목을 바꾸면 돼요. 다만 이 경우 대화 내용이 외부로 전송돼요.)
 
@@ -144,6 +145,9 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[voice]` `timeout_sec` | `0.1` | 마지막 음성 패킷 이후 이 시간 동안 패킷이 없으면 발화가 끝났다고 판단해요 | 즉시 |
 | `[voice]` `interrupt_speech_sec` | `0.5` | 지아가 말하는 중 사용자의 발화가 이 시간 이상 이어지면 재생을 중단해요(barge-in) | 즉시 |
 | `[voice]` `proactive_idle_sec` | `0` | 음성 채널에서 이 시간(초) 동안 아무도 말이 없으면 지아가 먼저 말을 걸어봐요 (0이면 사용 안 함) | 즉시 |
+| `[soundboard]` `auto_react` | `false` | 대화 상황에 맞는 효과음을 자동으로 재생할지 여부 | 즉시 |
+| `[soundboard]` `auto_react_cooldown_sec` | `20` | 같은 효과음이 자동으로 다시 재생되기까지의 최소 간격 | 즉시 |
+| `[soundboard]` `auto_react_chance` | `0.35` | 자동 반응 후보가 잡혔을 때 실제로 재생할 확률 | 즉시 |
 | `[vad]` `threshold` | `0.7` | 발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감) | 즉시 |
 | `[vad]` `min_speech_ms` | `150` | 이보다 짧은 발화 구간은 무시해요 | 즉시 |
 | `[vad]` `min_silence_ms` | `1000` | 발화 구간 분리에 필요한 최소 무음 시간 | 즉시 |
@@ -182,6 +186,8 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[comfyui]` `scheduler` | `normal` | 스케줄러 이름 (Flux 계열은 `simple` 권장) | 즉시 |
 | `[comfyui]` `negative_prompt` | (없음) | 네거티브 프롬프트 (Flux 계열은 비워둠) | 즉시 |
 | `[comfyui]` `timeout_sec` | `120` | 이미지 생성 대기 제한 시간(초) | 즉시 |
+| `[comfyui.models.<ID>]` `checkpoint` | (없음) | 상황별 이미지 생성 모델 프로필의 체크포인트 파일 이름 | `/jiareload` 권장 |
+| `[comfyui.models.<ID>]` `use_when` / `tags` | (없음) | 지아가 이 모델을 언제 고를지 판단할 설명과 태그 | `/jiareload` 권장 |
 | `[settings]` `watch_interval_sec` | `2.0` | `settings.toml` 변경 감지 주기(초) | 재시작 필요 |
 
 > [!tip]
@@ -249,7 +255,46 @@ transport = "streamable_http"
 - 서버 연결에 실패해도 지아의 대화는 정상 동작하고, 해당 도구만 빠져요.
 
 
-# 2-2. 사운드보드
+# 2-2. ComfyUI 이미지 생성 모델 프로필
+
+기본 설정처럼 `[comfyui] checkpoint` 하나만 적어도 이미지 생성은 동작해요. 이 경우 지아는 그 모델을 `default` 프로필로 사용합니다.
+
+그림 종류에 따라 다른 체크포인트를 쓰고 싶다면 `[comfyui.models.<ID>]` 테이블을 추가해 주세요. 지아는 이미지 생성 도구를 사용할 때 `use_when`과 `tags`를 보고 상황에 맞는 `model_id`를 고릅니다. 애매하면 `default`나 첫 번째 모델을 사용해요.
+
+```toml
+[comfyui]
+url = "http://127.0.0.1:8188"
+checkpoint = "default_model.safetensors" # fallback default 모델
+steps = 20
+cfg = 7.0
+width = 1024
+height = 1024
+
+[comfyui.models.illust]
+checkpoint = "anime_illust.safetensors"
+use_when = "캐릭터, 애니풍 일러스트, 감정 표현, 귀여운 장면"
+tags = ["character", "anime", "illust"]
+steps = 24
+cfg = 7.0
+
+[comfyui.models.photo]
+checkpoint = "realistic_photo.safetensors"
+use_when = "현실 사진, 음식, 장소, 물건, 제품처럼 사실적인 이미지"
+tags = ["photo", "realistic", "food", "place", "product"]
+
+[comfyui.models.meme]
+checkpoint = "meme_style.safetensors"
+use_when = "밈, 웃긴 상황, 과장된 리액션 이미지"
+tags = ["meme", "funny", "reaction"]
+```
+
+프로필별로 `steps`, `cfg`, `width`, `height`, `sampler`, `scheduler`, `negative_prompt`를 따로 지정할 수 있어요. 생략한 값은 `[comfyui]`의 기본값을 따라갑니다.
+
+> [!tip]
+> 모델 프로필을 바꾼 뒤 지아가 새 모델 목록을 바로 인지하게 하려면 `/jiareload`를 실행해주세요. 이미지 생성 시점에는 설정 파일을 다시 읽지만, LLM 도구 설명의 모델 목록은 에이전트 재로딩 후 가장 정확해요.
+
+
+# 2-3. 사운드보드
 
 지아가 대화 상황에 어울리는 효과음을 직접 골라 음성 채널에서 재생할 수 있어요.
 
@@ -264,6 +309,27 @@ transport = "streamable_http"
 "tada.mp3" = "축하하거나 무언가에 성공했을 때 쓰는 빰빠밤 팡파레 효과음"
 "dog.wav" = "강아지가 멍멍 짖는 소리"
 ```
+
+자동 반응을 더 세밀하게 조절하고 싶다면 아래처럼 효과음별 설정을 적을 수 있어요. 기존 문자열 형식도 계속 지원됩니다.
+
+```toml
+# settings.toml
+[soundboard]
+auto_react = true
+auto_react_cooldown_sec = 20
+auto_react_chance = 0.35
+
+# soundboard/sounds.toml
+"tada.mp3" = { desc = "축하하거나 성공했을 때 쓰는 팡파레", tags = ["success", "celebrate"], cooldown = 20, chance = 0.8 }
+"fail.wav" = { desc = "실패하거나 아쉬운 상황의 효과음", tags = ["fail", "awkward"], cooldown = 30, chance = 0.5 }
+"laugh.wav" = { desc = "웃긴 드립이나 농담에 쓰는 웃음 효과음", tags = ["laugh"], auto = true }
+"secret.wav" = { desc = "수동으로만 쓰고 싶은 효과음", auto = false }
+```
+
+- `tags`: 자동 반응에 사용할 상황 태그예요. `success`, `celebrate`, `fail`, `awkward`, `laugh`, `surprise`, `sad`, `angry` 같은 태그를 인식해요.
+- `cooldown`: 해당 효과음이 자동으로 다시 재생되기까지의 최소 간격이에요. 생략하면 `[soundboard] auto_react_cooldown_sec`를 따라가요.
+- `chance`: 후보로 잡혔을 때 실제로 재생할 확률이에요. 생략하면 `[soundboard] auto_react_chance`를 따라가요.
+- `auto = false`: 자동 반응에서는 제외하고, 지아가 직접 `play_soundboard` 도구를 쓸 때만 재생할 수 있게 해요.
 
 > [!note]
 > 보안을 위해 지아(LLM)는 `soundboard` 폴더 바로 아래에 있는 허용된 확장자의 오디오 파일만 재생할 수 있어요. 폴더 밖의 파일을 읽거나 재생하는 것은 차단돼요.
@@ -331,6 +397,8 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 26. LLM을 로컬 Ollama 대신 외부 API(OpenAI, Anthropic, Google 등)로도 사용할 수 있게 했습니다. `settings.toml`의 `[llm] provider`/`api_key`/`api_base`로 설정하며, 기본값은 로컬 `ollama`라 기존 사용자에게는 영향이 없습니다. 자세한 방법은 [외부 LLM API 사용](#외부-llm-api-사용) 항목을 참고하세요. (단, 외부 API 사용 시 대화 내용이 외부로 전송됩니다)
 27. `provider`를 `ollama`로 둔 채 `[llm] api_base`에 주소를 적으면, 다른 컴퓨터나 다른 포트에서 돌아가는 원격 Ollama 서버에도 연결할 수 있습니다. 모델 로드/언로드도 해당 서버를 향합니다.
 28. Ollama Cloud(https://ollama.com)를 지원합니다. `provider`를 `ollama`로 둔 채 `[llm] api_key`에 Ollama API 키만 넣으면 자동으로 클라우드(`https://ollama.com`)에 Bearer 인증으로 연결되어, 강력한 로컬 GPU 없이도 큰 모델을 쓸 수 있습니다. (이 경우 모델 로드/언로드는 클라우드가 관리하므로 건너뜁니다)
+29. 사운드보드 자동 반응 기능을 추가했습니다. `[soundboard] auto_react`를 켜면 대화 문맥과 `sounds.toml`의 태그를 바탕으로 효과음을 짧게 자동 재생하며, 효과음별 `cooldown`, `chance`, `auto` 설정으로 과한 재생을 막을 수 있습니다.
+30. ComfyUI 이미지 생성에서 상황별 모델 프로필을 지원합니다. `[comfyui.models.<ID>]`에 체크포인트와 `use_when`/`tags`를 등록하면 지아가 이미지 종류에 맞는 `model_id`를 선택해 생성합니다.
 
 ---
 

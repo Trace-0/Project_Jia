@@ -88,7 +88,7 @@ def _build_sys_prompt() -> str:
 - get_discord_message: 디스코드 채널의 메시지나 이미지를 불러올 때 호출해.
 - play_soundboard: 대화 상황에 어울리는 효과음을 음성 채널에서 재생할 때 호출해. 도구 설명에 있는 효과음만 재생할 수 있어."""
     if is_comfyui_enabled():
-        prompt += "\n- generate_image: 사용자가 그림이나 이미지를 그려달라고 할 때 호출해. prompt에는 영어 프롬프트를, wait_message에는 그리는 동안 채널에 먼저 보여줄 짧은 안내 문구를 너의 말투로 넣어. 안내 문구가 먼저 올라가고 생성이 끝나면 그 메시지가 그림으로 바뀌니, 호출 결과를 받은 뒤에 그림이 완성됐다고 자연스럽게 알려주면 돼."
+        prompt += "\n- generate_image: 사용자가 그림이나 이미지를 그려달라고 할 때 호출해. prompt에는 영어 프롬프트를, wait_message에는 그리는 동안 채널에 먼저 보여줄 짧은 안내 문구를 너의 말투로 넣어. model_id에는 도구 설명에 있는 모델 프로필 중 상황에 맞는 ID를 넣고, 애매하면 비워둬. 안내 문구가 먼저 올라가고 생성이 끝나면 그 메시지가 그림으로 바뀌니, 호출 결과를 받은 뒤에 그림이 완성됐다고 자연스럽게 알려주면 돼."
     return prompt
 
 def _build_voice_sys_prompt() -> str:

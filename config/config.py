@@ -41,6 +41,11 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "voice_interrupt_speech_sec": ("interrupt_speech_sec", "재생 중단(barge-in) 판정에 필요한 연속 발화 시간 (초)"),
         "proactive_idle_sec": ("proactive_idle_sec", "음성 채널에서 이 시간(초) 동안 아무도 말이 없으면 지아가 먼저 말을 걸어봄 (0이면 사용 안 함)"),
     },
+    "soundboard": {
+        "soundboard_auto_react": ("auto_react", "대화 상황에 맞는 효과음을 자동으로 재생할지 여부"),
+        "soundboard_auto_react_cooldown_sec": ("auto_react_cooldown_sec", "같은 효과음 자동 재생 사이 최소 간격 (초)"),
+        "soundboard_auto_react_chance": ("auto_react_chance", "자동 반응 후보가 잡혔을 때 실제로 재생할 확률 (0.0~1.0)"),
+    },
     "vad": {
         "vad_threshold": ("threshold", "발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감)"),
         "vad_min_speech_ms": ("min_speech_ms", "이보다 짧은 발화 구간은 무시 (ms)"),
@@ -174,6 +179,11 @@ class Config:
     voice_timeout_sec: float = 0.1
     voice_interrupt_speech_sec: float = 0.5
     proactive_idle_sec: int = 0  # 0이면 먼저 말 걸기 비활성화
+
+    # === 사운드보드 자동 반응 (저장 즉시 반영) ===
+    soundboard_auto_react: bool = False
+    soundboard_auto_react_cooldown_sec: int = 20
+    soundboard_auto_react_chance: float = 0.35
 
     # === VAD (저장 즉시 반영) ===
     vad_threshold: float = 0.7

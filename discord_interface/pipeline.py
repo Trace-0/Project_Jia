@@ -442,10 +442,12 @@ async def _respond_to_batch(guild: int, utterances: list[tuple[str, str]]):
     _register_tts_cancel(guild, cancel_event, sentence_queue)
     worker = threading.Thread(target=_tts_worker, args=(sentence_queue, guild, stream_task_id, cancel_event), daemon=True)
     worker.start()
+    spoken_sentences = []
     try:
         async for sentence in astream_call_response(guild, real_utterances, interrupted=interrupted, participants=participants, proactive=proactive):
             # 취소돼도 응답 생성은 끝까지 진행해 대화 기록은 보존하고, 재생만 건너뜀
             if sentence and not cancel_event.is_set():
+                spoken_sentences.append(sentence)
                 sentence_queue.put(sentence)
     except Exception as e:
         logging.error(f"[Pipeline] TTS 및 재생 중 오류 발생: {e}")
@@ -455,6 +457,13 @@ async def _respond_to_batch(guild: int, utterances: list[tuple[str, str]]):
         # 생성이 끝나기 전까지는 /jiastop 취소 신호를 받을 수 있도록 등록을 유지
         await asyncio.to_thread(worker.join)
         _unregister_tts_cancel(guild, cancel_event, sentence_queue)
+        if real_utterances and spoken_sentences and not cancel_event.is_set():
+            try:
+                from LLM.langchain_tools.soundboard import maybe_play_auto_reaction
+                transcript = "\n".join(f"{speaker}: {text}" for speaker, text in real_utterances)
+                maybe_play_auto_reaction(guild, f"{transcript}\n지아: {' '.join(spoken_sentences)}")
+            except Exception as e:
+                logging.error(f"[Pipeline] 사운드보드 자동 반응 처리 중 오류 발생: {e}")
 
 async def _wait_for_playback(guild: int):
     """이 길드의 오디오 재생이 모두 끝날 때까지 대기합니다."""
@@ -473,6 +482,12 @@ def run_audio_task(user, guild, audio_data_48k, only_hear: bool = False, textcha
 def process_text(task_id, user, guild, text):
     result_text = generate_response(user, guild, text)
     send_text_result(task_id, result_text)
+    if result_text:
+        try:
+            from LLM.langchain_tools.soundboard import maybe_play_auto_reaction
+            maybe_play_auto_reaction(guild, f"{user}: {text}\n지아: {result_text}")
+        except Exception as e:
+            logging.error(f"[Pipeline] 사운드보드 자동 반응 처리 중 오류 발생: {e}")
 
 def run_text_task(task_id, user, guild, text):
     threading.Thread(target=process_text, args=(task_id, user, guild, text), daemon=True).start()
