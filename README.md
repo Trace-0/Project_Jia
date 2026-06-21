@@ -109,26 +109,26 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `/jia [내용]` , `/지아 [내용]` | 이 커맨드 뒤에 적히는 내용은 지아가 대답해줘요! 예) /지아 안녕? |
 | `/jiajoin` | 지아가 통화방에 들어와요! |
 | `/jialeave` | 지아가 통화방에서 나가요. :( |
-| `/jiareload` | 지아의 설정을 다시 불러와요. |
-| `/jiasavesetting` | 현재 지아의 설정을 `settings.toml`에 저장해요. |
-| `/jiaunloadmodel` | 현재 로드된 LLM 모델을 언로드해요. |
+| `/jiareload` | 지아의 설정을 다시 불러와요. 봇 소유자/화이트리스트 전용이에요. |
+| `/jiasavesetting` | 현재 지아의 설정을 `settings.toml`에 저장해요. 봇 소유자/화이트리스트 전용이에요. |
+| `/jiaunloadmodel` | 현재 로드된 LLM 모델을 언로드해요. 봇 소유자/화이트리스트 전용이에요. |
 | `/jiaping` | 지아가 "pong!" 메시지를 보내요. |
 | `/jiasay [문장]` | 지아가 [문장] 부분을 읽어줘요. |
-| `/jiahear (채널ID)` | 지아가 듣는 내용을 (채널ID)에 적어줘요. (채널ID)를 입력하지 않으면 debug text channel에 적어줘요. |
+| `/jiahear (채널ID)` | 지아가 듣는 내용을 (채널ID)에 적어줘요. (채널ID)를 입력하지 않으면 debug text channel에 적어줘요. 서버 관리자/화이트리스트 전용이에요. |
 | `/jiastop` | 현재 지아가 재생중인 음성을 멈춰요. |
-| `/jiaplay <로컬 파일 경로>` | 봇 PC의 로컬 오디오 파일을 재생해요. 보안상 위험해서 기본 비활성화되어 있고, `[security] allow_unsafe_jiaplay`를 켠 경우에만 작동해요. |
+| `/jiaplay <로컬 파일 경로>` | 봇 PC의 로컬 오디오 파일을 재생해요. 보안상 위험해서 기본 비활성화되어 있고, 설정을 켠 뒤에도 봇 소유자/화이트리스트 전용이에요. |
 | `/jiajoinnoagent` | 지아가 통화방에 들어와요. 하지만, 아무 기능도 작동하지 않아요. |
-| `/jiatalk` | 해당 채널에서 작성하는 모든 대화는 지아가 대답해줘요. 이제 `/jia`나 `/지아`를 입력하지 않아도 괜찮아요. |
-| `/jiastoptalk` | `/jiatalk` 기능을 멈춰요. |
+| `/jiatalk` | 해당 채널에서 작성하는 모든 대화는 지아가 대답해줘요. 이제 `/jia`나 `/지아`를 입력하지 않아도 괜찮아요. 서버 관리자/화이트리스트 전용이에요. |
+| `/jiastoptalk` | `/jiatalk` 기능을 멈춰요. 서버 관리자/화이트리스트 전용이에요. |
 | `/jiamusic play <유튜브 URL/재생목록/검색어>` | 기존 대기열을 바꾸고 유튜브 음악을 재생해요. 지아가 말할 때는 자동으로 음악 볼륨이 낮아져요. |
 | `/jiamusic queue <유튜브 URL/재생목록/검색어>` | 현재 음악 대기열 뒤에 곡이나 재생목록을 추가해요. |
 | `/jiamusic stop/skip/pause/resume/status` | 배경 음악을 멈추거나 다음 곡으로 넘기고, 일시정지/재개/상태 확인을 해요. |
 | `/jiamusic volume <0.0~1.0>` | 배경 음악 볼륨을 조절해요. |
-| `/jiarestart` | 지아가 재시작돼요. 재시작이 필요한 설정을 바꿨을 때 사용해요. |
-| `/jiamemory list (페이지)` | 이 서버에 저장된 기억을 최신순으로 보여줘요. |
-| `/jiamemory search [검색어]` | 저장된 기억을 유사도로 검색해요. |
-| `/jiamemory delete [ID]` | 해당 ID로 시작하는 기억을 삭제해요. (ID는 list/search에서 확인) |
-| `/jiamemory profile (이름)` | 지아가 그 사용자에 대해 기억하고 있는 사실을 보여줘요. 서버 관리자 전용이에요. |
+| `/jiarestart` | 지아가 재시작돼요. 재시작이 필요한 설정을 바꿨을 때 사용해요. 봇 소유자/화이트리스트 전용이에요. |
+| `/jiamemory list (페이지)` | 이 서버에 저장된 기억을 최신순으로 보여줘요. 서버 관리자/화이트리스트 전용이에요. |
+| `/jiamemory search [검색어]` | 저장된 기억을 유사도로 검색해요. 서버 관리자/화이트리스트 전용이에요. |
+| `/jiamemory delete [ID]` | 해당 ID로 시작하는 기억을 삭제해요. (ID는 list/search에서 확인) 서버 관리자/화이트리스트 전용이에요. |
+| `/jiamemory profile (이름)` | 지아가 그 사용자에 대해 기억하고 있는 사실을 보여줘요. 서버 관리자/화이트리스트 전용이에요. |
 | `/jiamemory optout` | 지아가 나에 대한 대화와 정보를 기억하지 않게 해요. 기존 프로필과 단독 대화 기억도 함께 삭제돼요. |
 | `/jiamemory optin` | 기억 기능을 다시 켜요. |
 | `/jiamemory status` | 내 기억 설정 상태와 내 프로필 내용을 확인해요. |
@@ -157,6 +157,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[music]` `volume` | `0.7` | 배경 음악 기본 볼륨 | 즉시 |
 | `[music]` `duck_volume` | `0.25` | 지아가 말하거나 효과음이 재생될 때 낮출 음악 볼륨 | 즉시 |
 | `[music]` `max_playlist_items` | `50` | 유튜브 재생목록에서 한 번에 추가할 최대 곡 수 | 즉시 |
+| `[security]` `command_whitelist_user_ids` | `[]` | 보호 명령 권한을 우회할 Discord 유저 ID 목록 | 즉시 |
 | `[security]` `allow_unsafe_jiaplay` | `false` | 위험 기능인 `/jiaplay` 로컬 파일 재생을 허용할지 여부 | 즉시 |
 | `[vad]` `threshold` | `0.7` | 발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감) | 즉시 |
 | `[vad]` `min_speech_ms` | `150` | 이보다 짧은 발화 구간은 무시해요 | 즉시 |
@@ -348,7 +349,23 @@ auto_react_chance = 0.35
 > 파일을 새로 넣으면 다음 도구 호출 때 바로 재생할 수 있지만, 지아가 효과음 목록을 새로 인지하게 하려면 `/jiareload`를 한 번 실행해주는 것이 좋아요.
 
 
-# 2-4. 위험 기능: /jiaplay 로컬 파일 재생
+# 2-4. 보호 명령과 화이트리스트
+
+일부 명령은 서버 전체 동작, 기억 조회/삭제, 로컬 파일 접근에 영향을 주므로 권한이 필요해요. `owner` 보호 명령은 Discord 봇 소유자 또는 `[security] command_whitelist_user_ids`에 등록된 유저만 사용할 수 있고, `admin` 보호 명령은 서버 관리자/서버 관리 권한자 또는 화이트리스트 유저가 사용할 수 있어요.
+
+```toml
+[security]
+command_whitelist_user_ids = [123456789012345678]
+```
+
+- `owner` 보호 명령: `/jiareload`, `/jiasavesetting`, `/jiaunloadmodel`, `/jiarestart`, `/jiaplay`
+- `admin` 보호 명령: `/jiahear`, `/jiatalk`, `/jiastoptalk`, `/jiamemory list`, `/jiamemory search`, `/jiamemory delete`, `/jiamemory profile`
+- 일반 사용자 명령: `/jia`, `/지아`, `/jiajoin`, `/jialeave`, `/jiajoinnoagent`, `/jiaping`, `/jiasay`, `/jiastop`, `/jiamusic ...`, `/jiamemory optout`, `/jiamemory optin`, `/jiamemory status`
+
+화이트리스트는 Discord 서버 권한과 무관하게 보호 명령을 허용하는 우회 목록이므로, 실제로 봇 운영을 맡길 사람의 ID만 등록하는 것을 권장해요. `/jiaplay`는 화이트리스트나 봇 소유자 권한이 있어도 `[security] allow_unsafe_jiaplay = true`를 켜야 실제로 재생됩니다.
+
+
+# 2-5. 위험 기능: /jiaplay 로컬 파일 재생
 
 `/jiaplay <로컬 파일 경로>`는 봇이 실행 중인 컴퓨터의 로컬 오디오 파일을 직접 읽어서 음성 채널에 재생하는 기능이에요. 이 기능은 편하지만 보안상 위험해서 기본값으로 꺼져 있습니다.
 
@@ -362,7 +379,7 @@ allow_unsafe_jiaplay = true
 따라서 이 설정은 개인 서버나 완전히 신뢰하는 사용자만 명령을 쓸 수 있는 환경에서만 켜는 것을 권장해요. 일반적인 음악 재생은 `/jiamusic`의 유튜브 재생 기능을 사용하는 편이 더 안전합니다.
 
 
-# 2-5. 배경 음악과 덕킹
+# 2-6. 배경 음악과 덕킹
 
 `/jiamusic` 명령어로 음성 채널에 유튜브 음악을 틀 수 있어요. `yt-dlp`로 유튜브 단일 영상, 재생목록 URL, 검색어를 받아 재생 큐로 만들고, 각 곡을 재생할 때 실제 오디오 스트림 URL을 가져옵니다. 음악이 재생되는 동안 지아가 TTS로 대답하거나 사운드보드 효과음을 재생하면, 음악 볼륨이 자동으로 `[music] duck_volume`까지 낮아지고 foreground 재생이 끝나면 원래 볼륨으로 돌아갑니다.
 
@@ -453,6 +470,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 33. [음성] `/jiamusic`가 로컬 파일 직접 재생 대신 `yt-dlp` 기반 유튜브 재생을 사용합니다. 유튜브 단일 영상, 검색어, 재생목록을 지원하고 `queue`/`skip`으로 대기열을 제어할 수 있습니다.
 34. [보안] `/jiaplay` 로컬 파일 재생은 기본 비활성화했습니다. Discord 명령으로 봇 PC의 로컬 파일을 읽어 음성 채널에 내보낼 수 있는 위험 기능이므로 `[security] allow_unsafe_jiaplay = true`를 명시적으로 설정한 경우에만 작동합니다.
 35. [보안] `/jiamemory profile`은 서버 관리자 전용으로 변경하고, 일반 사용자는 `/jiamemory status`에서 본인의 기억 설정과 프로필 내용을 함께 확인하도록 변경했습니다.
+36. [보안] 보호 명령 권한 체계를 추가했습니다. owner/admin 보호 명령은 권한을 확인하고, `[security] command_whitelist_user_ids`에 등록된 Discord 유저는 서버 권한과 무관하게 보호 명령을 사용할 수 있습니다.
 
 ---
 

@@ -52,6 +52,12 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "music_max_playlist_items": ("max_playlist_items", "유튜브 재생목록에서 한 번에 추가할 최대 곡 수"),
     },
     "security": {
+        "command_whitelist_user_ids": (
+            "command_whitelist_user_ids",
+            "보호 명령 권한 우회 유저 ID 목록입니다.\n"
+            "여기에 Discord 유저 ID를 숫자로 등록하면 서버 권한과 관계없이 owner/admin 보호 명령을 사용할 수 있습니다.\n"
+            "예: command_whitelist_user_ids = [123456789012345678]",
+        ),
         "allow_unsafe_jiaplay": (
             "allow_unsafe_jiaplay",
             "위험 기능: /jiaplay 로컬 파일 재생을 허용합니다.\n"
@@ -130,6 +136,13 @@ def _env_key(field_name: str) -> str:
 
 def _parse_env_value(raw: str, f) -> object:
     """환경 변수(.env) 문자열 값을 필드 타입에 맞게 변환합니다. (.env 마이그레이션/환경 변수 오버라이드용)"""
+    if f.name == "command_whitelist_user_ids":
+        raw = raw.strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            return [int(v) for v in json.loads(raw)]
+        return [int(v.strip()) for v in raw.split(",") if v.strip()]
     if f.type is bool:
         return raw.strip().lower() in ("1", "true", "yes", "on")
     if f.type is float:
@@ -147,6 +160,13 @@ def _coerce_toml_value(value, f) -> object:
     """settings.toml에서 읽은 값을 필드 타입에 맞게 변환합니다."""
     if f.name == "debug_text_channel":
         return int(value) or None  # 0은 미설정으로 취급
+    if f.name == "command_whitelist_user_ids":
+        plain = value.unwrap() if hasattr(value, "unwrap") else value
+        if isinstance(plain, (list, tuple)):
+            return [int(v) for v in plain]
+        if isinstance(plain, str) and plain.strip():
+            return [int(v.strip()) for v in plain.split(",") if v.strip()]
+        return []
     if f.name == "llm_tools":
         plain = value.unwrap() if hasattr(value, "unwrap") else value
         if isinstance(plain, dict):
@@ -205,6 +225,7 @@ class Config:
     music_max_playlist_items: int = 50
 
     # === 위험 기능 (저장 즉시 반영) ===
+    command_whitelist_user_ids: list[int] = field(default_factory=list)
     allow_unsafe_jiaplay: bool = False
 
     # === VAD (저장 즉시 반영) ===

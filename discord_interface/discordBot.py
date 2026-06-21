@@ -459,6 +459,42 @@ def bot():
                 return True
             return False
 
+        async def is_command_whitelisted(ctx) -> bool:
+            try:
+                whitelist = {int(user_id) for user_id in config.command_whitelist_user_ids}
+            except (TypeError, ValueError):
+                whitelist = set()
+            if getattr(ctx.author, "id", None) in whitelist:
+                return True
+            try:
+                return await bot.is_owner(ctx.author)
+            except Exception:
+                return False
+
+        def has_server_admin_permission(ctx) -> bool:
+            permissions = getattr(ctx.author, "guild_permissions", None)
+            return bool(
+                getattr(permissions, "administrator", False)
+                or getattr(permissions, "manage_guild", False)
+            )
+
+        async def require_command_access(ctx, level: str, command_name: str) -> bool:
+            if await is_command_whitelisted(ctx):
+                return True
+            if level == "admin" and has_server_admin_permission(ctx):
+                return True
+
+            if level == "owner":
+                message = f"`{command_name}`은 봇 소유자 또는 명령어 화이트리스트 유저만 사용할 수 있어요."
+            else:
+                message = f"`{command_name}`은 서버 관리자 또는 명령어 화이트리스트 유저만 사용할 수 있어요."
+            await ctx.send(message)
+            if bot.def_channel:
+                guild_name = getattr(getattr(ctx, "guild", None), "name", "DM")
+                channel_name = getattr(getattr(ctx, "channel", None), "name", "unknown")
+                await bot.def_channel.send(f"{guild_name}/{channel_name} : 권한 부족 ({command_name}, {ctx.author})")
+            return False
+
         def on_config_changed(changed: dict):
             """settings.toml 자동 리로드 후 호출되는 후처리 콜백. (config 워처 스레드에서 실행)
 
@@ -701,6 +737,8 @@ def bot():
 
         @bot.command(name="jiareload", description="지아의 설정을 다시 불러와요")
         async def jiareload(ctx):
+            if not await require_command_access(ctx, "owner", "/jiareload"):
+                return
             try:
                 from config.config_manager import config as global_config
                 from LLM.langchain_llm import reload_llm
@@ -727,6 +765,8 @@ def bot():
 
         @bot.command(name="jiasavesetting", description="지아의 설정을 저장해요")
         async def jiasavesetting(ctx):
+            if not await require_command_access(ctx, "owner", "/jiasavesetting"):
+                return
             try:
                 from config.config_manager import config as global_config
                 global_config.save_setting()
@@ -742,6 +782,8 @@ def bot():
 
         @bot.command(name="jiaunloadmodel", description="지아의 LLM 모델을 메모리에서 내려요.")
         async def jiaunloadmodel(ctx):
+            if not await require_command_access(ctx, "owner", "/jiaunloadmodel"):
+                return
             try:
                 model_name = config.llmModel
                 # 백그라운드 스레드에서 모델 언로드 함수 실행
@@ -757,6 +799,8 @@ def bot():
 
         @bot.command(name="jiarestart", description="지아를 재시작해요. 재시작이 필요한 설정 변경(임베딩 모델 등)을 반영할 때 사용해요.")
         async def jiarestart(ctx):
+            if not await require_command_access(ctx, "owner", "/jiarestart"):
+                return
             try:
                 await ctx.send("재시작할게요. 잠시 후에 다시 만나요!")
                 if bot.def_channel:
@@ -830,6 +874,8 @@ def bot():
 
         @bot.command(name="jiahear", description="지아가 음성 채널에서 듣고 텍스트로 변환해줘요")
         async def jiahear(ctx, textID: int = None):
+            if not await require_command_access(ctx, "admin", "/jiahear"):
+                return
             if ctx.author.voice is None:
                 await ctx.send("먼저 음성 채널에 들어가주세요")
                 if bot.def_channel:
@@ -873,6 +919,8 @@ def bot():
                 )
                 if bot.def_channel:
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 재생 차단 (/jiaplay 비활성화)")
+                return
+            if not await require_command_access(ctx, "owner", "/jiaplay"):
                 return
             voice_client = ctx.voice_client
             if not isinstance(voice_client, discord.VoiceClient):
@@ -1035,6 +1083,9 @@ def bot():
                 rag = get_rag_instance(ctx.guild.id)
                 action = action.lower()
                 arg = arg.strip()
+                if action in {"list", "search", "delete", "profile"}:
+                    if not await require_command_access(ctx, "admin", f"/jiamemory {action}"):
+                        return
 
                 def format_rows(rows) -> str:
                     lines = []
@@ -1042,13 +1093,6 @@ def bot():
                         summary_short = summary if len(summary) <= 120 else summary[:120] + "…"
                         lines.append(f"`{mem_id[:8]}` [{timestamp[:16]}] ({username}, 중요도 {importance:.2f})\n　{summary_short}")
                     return "\n".join(lines)
-
-                def is_memory_admin() -> bool:
-                    permissions = getattr(ctx.author, "guild_permissions", None)
-                    return bool(
-                        getattr(permissions, "administrator", False)
-                        or getattr(permissions, "manage_guild", False)
-                    )
 
                 if action == "list":
                     page = int(arg) if arg.isdigit() else 1
@@ -1090,9 +1134,6 @@ def bot():
                         await ctx.send("해당 ID로 시작하는 기억을 찾지 못했어요.")
 
                 elif action == "profile":
-                    if not is_memory_admin():
-                        await ctx.send("`/jiamemory profile`은 서버 관리자만 사용할 수 있어요. 내 기억 상태와 프로필은 `/jiamemory status`에서 확인할 수 있어요.")
-                        return
                     name = arg or ctx.author.name
                     facts = rag.get_profile_facts(name)
                     if not facts:
@@ -1156,6 +1197,8 @@ def bot():
 
         @bot.command(name="jiatalk", description="지아와 대화를 시작해요. (대화에 /jia를 붙이지 않아도 괜찮아요.)")
         async def jiatalk(ctx):
+            if not await require_command_access(ctx, "admin", "/jiatalk"):
+                return
             # 길드에 대한 채널 set이 없으면 생성
             if ctx.guild.id not in bot.autotalk_channels:
                 bot.autotalk_channels[ctx.guild.id] = set()
@@ -1169,6 +1212,8 @@ def bot():
 
         @bot.command(name="jiastoptalk", description="지아의 대화를 종료해요")
         async def jiastoptalk(ctx):
+            if not await require_command_access(ctx, "admin", "/jiastoptalk"):
+                return
             if ctx.guild.id not in bot.autotalk_channels or ctx.channel.id not in bot.autotalk_channels[ctx.guild.id]:
                 await ctx.send("이 채널에서는 대화 기능이 활성화되어 있지 않아요.")
                 return
