@@ -255,14 +255,20 @@ api_key = "..."          # https://ollama.com/settings/keys 에서 발급
 command = "uvx"
 args = ["duckduckgo-mcp-server"]
 transport = "stdio"
+description = "DuckDuckGo 검색으로 웹 검색 결과를 가져올 수 있습니다."
+use_when = "최신 정보, 인터넷 확인이 필요한 사실, 지아가 확실히 모르는 외부 정보를 물어볼 때 사용합니다."
 
 # 원격/로컬 HTTP 서버를 연결하는 예시
 [llm.tools.my-server]
 url = "http://localhost:9000/mcp"
 transport = "streamable_http"
+description = "내 서비스의 주문, 재고, 사용자 정보를 조회할 수 있습니다."
+use_when = "사용자가 내 서비스 데이터 조회나 운영 상태 확인을 부탁할 때 사용합니다."
 ```
 
 - 저장하면 재시작 없이 자동으로 다시 연결돼요.
+- `description`과 `use_when`은 MCP 서버로 전달되지 않고, 지아가 어떤 상황에서 해당 MCP 도구를 고려해야 하는지 판단하는 안내문으로만 사용돼요.
+- 실제 연결 설정에는 `command`, `args`, `transport`, `url`처럼 `MultiServerMCPClient`가 이해하는 값을 적고, 설명용 메타데이터는 `description`, `use_when`에 적어주세요.
 - MCP를 아예 사용하지 않으려면 `tools = {}`로 적어주세요.
 - 서버 연결에 실패해도 지아의 대화는 정상 동작하고, 해당 도구만 빠져요.
 
@@ -480,6 +486,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 35. [보안] `/jiamemory profile`은 서버 관리자 전용으로 변경하고, 일반 사용자는 `/jiamemory status`에서 본인의 기억 설정과 프로필 내용을 함께 확인하도록 변경했습니다.
 36. [보안] 보호 명령 권한 체계를 추가했습니다. owner/admin 보호 명령은 권한을 확인하고, `[security] command_whitelist_user_ids`에 등록된 Discord 유저는 서버 권한과 무관하게 보호 명령을 사용할 수 있습니다.
 37. [보안] `/jiamusic` URL 입력 제한을 추가했습니다. 검색어는 계속 허용하지만 URL은 `[security] music_allowed_url_hosts`에 등록된 호스트만 `yt-dlp`로 전달합니다.
+38. MCP 서버 설정에 `description`과 `use_when` 메타데이터를 추가할 수 있게 했습니다. 이 설명은 MCP 연결 설정에서는 제외되고, 지아의 시스템 프롬프트에 MCP 서버 사용 가이드로 반영됩니다.
 
 ---
 

@@ -25,6 +25,8 @@ def DEFAULT_MCP_SERVERS() -> dict:
             "command": "uvx",
             "args": ["duckduckgo-mcp-server"],
             "transport": "stdio",
+            "description": "DuckDuckGo 검색으로 웹 검색 결과를 가져올 수 있습니다.",
+            "use_when": "최신 정보, 인터넷 확인이 필요한 사실, 지아가 확실히 모르는 외부 정보를 물어볼 때 사용합니다.",
         }
     }
 
@@ -103,7 +105,7 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "llm_api_base": ("api_base", "LLM 서버/API 주소 재정의 (선택). ollama면 원격 Ollama 서버 주소, 외부 API면 OpenAI 호환 서버 등. 비우면 기본 주소(로컬, 또는 키만 있으면 Ollama Cloud) 사용"),
         "llmNumCtx": ("num_ctx", "LLM 컨텍스트 윈도우 크기(토큰). 대화 기록도 이 크기에 맞춰 유지됨. provider가 ollama일 때만 적용 (변경 시 자동 재로딩)"),
         "llmSystemPrompt": ("system_prompt", "지아의 성격/말투를 정의하는 시스템 프롬프트 (변경 시 자동 재로딩)"),
-        "llm_tools": ("tools", "연결할 MCP 서버 목록 (변경 시 자동 재연결). [llm.tools.서버이름] 테이블로 추가, 빈 테이블 {}이면 사용 안 함"),
+        "llm_tools": ("tools", "연결할 MCP 서버 목록 (변경 시 자동 재연결). [llm.tools.서버이름] 테이블로 추가하고, description/use_when에는 지아가 참고할 서버 설명을 적을 수 있음. 빈 테이블 {}이면 사용 안 함"),
         "llm_response_reserve_tokens": ("response_reserve_tokens", "컨텍스트 윈도우에서 응답 생성을 위해 남겨둘 토큰 여유분"),
     },
     "rag": {
