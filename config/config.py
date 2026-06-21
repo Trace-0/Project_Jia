@@ -28,6 +28,12 @@ def DEFAULT_MCP_SERVERS() -> dict:
         }
     }
 
+
+def DEFAULT_MUSIC_ALLOWED_URL_HOSTS() -> list[str]:
+    """기본으로 허용하는 /jiamusic URL 호스트."""
+    return ["youtube.com", "youtu.be"]
+
+
 # Config 필드 -> settings.toml의 {섹션: {필드명: (키, 주석)}} 매핑
 TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     "bot": {
@@ -57,6 +63,14 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
             "보호 명령 권한 우회 유저 ID 목록입니다.\n"
             "여기에 Discord 유저 ID를 숫자로 등록하면 서버 권한과 관계없이 owner/admin 보호 명령을 사용할 수 있습니다.\n"
             "예: command_whitelist_user_ids = [123456789012345678]",
+        ),
+        "music_allowed_url_hosts": (
+            "music_allowed_url_hosts",
+            "/jiamusic URL 입력에서 허용할 호스트 목록입니다.\n"
+            "URL은 여기에 등록된 호스트 또는 하위 도메인만 yt-dlp에 전달됩니다.\n"
+            "검색어 입력은 URL이 아니므로 받을 수 있지만, 검색 결과 URL도 이 목록을 통과해야 큐에 들어갑니다.\n"
+            "기본값은 youtube.com 하위 도메인과 youtu.be만 허용합니다.\n"
+            "예: music_allowed_url_hosts = [\"youtube.com\", \"youtu.be\"]",
         ),
         "allow_unsafe_jiaplay": (
             "allow_unsafe_jiaplay",
@@ -134,15 +148,21 @@ def _env_key(field_name: str) -> str:
     return ENV_PREFIX + re.sub(r"(?<!^)(?=[A-Z])", "_", field_name).upper()
 
 
+def _parse_string_list(raw: str) -> list[str]:
+    raw = raw.strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        return [str(v).strip() for v in json.loads(raw) if str(v).strip()]
+    return [v.strip() for v in raw.split(",") if v.strip()]
+
+
 def _parse_env_value(raw: str, f) -> object:
     """환경 변수(.env) 문자열 값을 필드 타입에 맞게 변환합니다. (.env 마이그레이션/환경 변수 오버라이드용)"""
     if f.name == "command_whitelist_user_ids":
-        raw = raw.strip()
-        if not raw:
-            return []
-        if raw.startswith("["):
-            return [int(v) for v in json.loads(raw)]
-        return [int(v.strip()) for v in raw.split(",") if v.strip()]
+        return [int(v) for v in _parse_string_list(raw)]
+    if f.name == "music_allowed_url_hosts":
+        return _parse_string_list(raw)
     if f.type is bool:
         return raw.strip().lower() in ("1", "true", "yes", "on")
     if f.type is float:
@@ -166,6 +186,13 @@ def _coerce_toml_value(value, f) -> object:
             return [int(v) for v in plain]
         if isinstance(plain, str) and plain.strip():
             return [int(v.strip()) for v in plain.split(",") if v.strip()]
+        return []
+    if f.name == "music_allowed_url_hosts":
+        plain = value.unwrap() if hasattr(value, "unwrap") else value
+        if isinstance(plain, (list, tuple)):
+            return [str(v).strip() for v in plain if str(v).strip()]
+        if isinstance(plain, str) and plain.strip():
+            return _parse_string_list(plain)
         return []
     if f.name == "llm_tools":
         plain = value.unwrap() if hasattr(value, "unwrap") else value
@@ -226,6 +253,7 @@ class Config:
 
     # === 위험 기능 (저장 즉시 반영) ===
     command_whitelist_user_ids: list[int] = field(default_factory=list)
+    music_allowed_url_hosts: list[str] = field(default_factory=DEFAULT_MUSIC_ALLOWED_URL_HOSTS)
     allow_unsafe_jiaplay: bool = False
 
     # === VAD (저장 즉시 반영) ===

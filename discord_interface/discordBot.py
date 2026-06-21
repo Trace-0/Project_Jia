@@ -262,7 +262,7 @@ class AudioStreamManager:
         resolved_track = track
         try:
             loop = asyncio.get_running_loop()
-            resolved_track = await loop.run_in_executor(None, resolve_music_track, track)
+            resolved_track = await loop.run_in_executor(None, resolve_music_track, track, config.music_allowed_url_hosts)
             source = discord.FFmpegPCMAudio(
                 resolved_track.stream_url,
                 before_options=MUSIC_FFMPEG_BEFORE_OPTIONS,
@@ -964,7 +964,7 @@ def bot():
                     await ctx.send("유튜브 음악 정보를 불러오는 중이에요...")
                     try:
                         max_items = max(1, int(config.music_max_playlist_items))
-                        tracks = await asyncio.to_thread(build_music_queue, query, max_items)
+                        tracks = await asyncio.to_thread(build_music_queue, query, max_items, config.music_allowed_url_hosts)
                     except Exception as e:
                         await ctx.send(f"유튜브 음악 정보를 불러오지 못했어요: {e}")
                         if bot.def_channel:
