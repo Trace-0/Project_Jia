@@ -11,7 +11,7 @@ from datetime import datetime
 from LLM.langchain_tools.mcp_manager import get_client, get_mcp_usage_guidance
 from memory.calculate_importance import calculate_and_save_importance
 from LLM.langchain_tools.load_discord_message import load_discord_message_tool
-from LLM.langchain_tools.soundboard import soundboard_tool
+from LLM.langchain_tools.soundboard import get_sound_registry_version, load_sound_registry, soundboard_tool
 from LLM.langchain_tools.comfyui_image import comfyui_image_tool, is_comfyui_enabled
 import asyncio
 import re
@@ -177,6 +177,8 @@ def run_async(coro):
 
 callagents = {}
 textagents = {}
+callagent_sound_versions = {}
+textagent_sound_versions = {}
 
 def reload_llm():
     """reload된 config로 LLM과 시스템 프롬프트를 다시 만들고 에이전트 캐시를 비웁니다.
@@ -191,6 +193,8 @@ def reload_llm():
     voice_sys_prompt = _build_voice_sys_prompt()
     callagents.clear()
     textagents.clear()
+    callagent_sound_versions.clear()
+    textagent_sound_versions.clear()
     logging.info(f"[LLM:Reloader] LLM({config.llmModel})과 시스템 프롬프트를 다시 불러왔어요.")
 
 def _get_mcp_tools() -> list:
@@ -201,9 +205,19 @@ def _get_mcp_tools() -> list:
         logging.error(f"[LLM:MCP] MCP 도구를 불러오지 못했어요. [llm] tools 설정과 서버 상태를 확인해주세요.\n   -> {e}")
         return []
 
+def _soundboard_cache_version() -> int:
+    try:
+        load_sound_registry()
+        return get_sound_registry_version()
+    except Exception as e:
+        logging.error(f"[Soundboard] sounds.toml sync failed: {e}")
+        return -1
+
+
 def get_agent_for_guild(guild_id: int, is_text: bool):
+    sound_version = _soundboard_cache_version()
     if is_text:
-        if guild_id not in textagents:
+        if guild_id not in textagents or textagent_sound_versions.get(guild_id) != sound_version:
             _time = time_tool()
             tools = _get_mcp_tools() + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
             if is_comfyui_enabled():
@@ -216,9 +230,10 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
                 pre_model_hook=pre_agent_hook
             )
             textagents[guild_id] = react_agent
+            textagent_sound_versions[guild_id] = sound_version
         return textagents[guild_id]
     else:
-        if guild_id not in callagents:
+        if guild_id not in callagents or callagent_sound_versions.get(guild_id) != sound_version:
             _time = time_tool()
             # 음성도 텍스트와 동일하게 MCP 도구를 사용. 다만 voice_sys_prompt로 도구 사용을 자제시킴.
             tools = _get_mcp_tools() + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
@@ -232,6 +247,7 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
                 pre_model_hook=pre_agent_hook
             )
             callagents[guild_id] = call_react_agent
+            callagent_sound_versions[guild_id] = sound_version
         return callagents[guild_id]
 
 # === 오래 걸리는 도구 호출 시 대기 안내 ===

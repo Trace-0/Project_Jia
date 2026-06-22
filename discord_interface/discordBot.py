@@ -734,6 +734,9 @@ def bot():
             print('봇 온라인!')
             # 파이프라인에 봇 인스턴스 전달
             pipeline.set_bot(bot)
+            from LLM.langchain_tools.soundboard import load_sound_registry, start_soundboard_registry_watcher
+            await asyncio.to_thread(load_sound_registry)
+            start_soundboard_registry_watcher()
             
             bot.def_channel = await get_channel_sure()
             if bot.def_channel:
@@ -751,9 +754,11 @@ def bot():
             try:
                 from config.config_manager import config as global_config
                 from LLM.langchain_llm import reload_llm
+                from LLM.langchain_tools.soundboard import load_sound_registry
                 from discord_interface.espnet_tts_output import reload_tts_model
                 old_llm_model = global_config.llmModel
                 global_config.reload()
+                await asyncio.to_thread(load_sound_registry)
                 reload_whisper_model()  # Whisper 모델 재로딩
                 reload_tts_model()  # TTS 모델 재로딩
                 reload_llm()  # LLM과 시스템 프롬프트 재로딩, 에이전트 캐시 초기화

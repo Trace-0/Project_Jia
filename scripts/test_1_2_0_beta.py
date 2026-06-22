@@ -15,6 +15,7 @@ import contextlib
 import importlib
 import re
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -238,6 +239,41 @@ class Beta120MusicTests(unittest.TestCase):
 
 
 class Beta120SoundboardTests(unittest.TestCase):
+    def test_soundboard_registry_adds_new_audio_files_to_toml(self):
+        class FakeTool:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+        fake_config = SimpleNamespace(
+            soundboard_auto_react=False,
+            soundboard_auto_react_chance=0.35,
+            soundboard_auto_react_cooldown_sec=20,
+        )
+        patches = {
+            "langchain_core": make_module("langchain_core"),
+            "langchain_core.tools": make_module("langchain_core.tools", Tool=FakeTool),
+            "config.config_manager": make_module("config.config_manager", config=fake_config),
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, patched_modules(patches):
+            soundboard_dir = Path(tmpdir) / "soundboard"
+            soundboard_dir.mkdir()
+            (soundboard_dir / "drop in.mp3").write_bytes(b"")
+
+            soundboard = import_fresh("LLM.langchain_tools.soundboard")
+            soundboard.SOUNDBOARD_DIR = soundboard_dir
+            soundboard.REGISTRY_PATH = soundboard_dir / "sounds.toml"
+
+            sounds = soundboard.load_sound_registry()
+            self.assertIn("drop in.mp3", sounds)
+            self.assertIn('"drop in.mp3"', soundboard.REGISTRY_PATH.read_text(encoding="utf-8"))
+
+            version = soundboard.get_sound_registry_version()
+            (soundboard_dir / "second.wav").write_bytes(b"")
+            sounds = soundboard.load_sound_registry()
+            self.assertIn("second.wav", sounds)
+            self.assertGreater(soundboard.get_sound_registry_version(), version)
+
     def test_soundboard_registry_scoring_and_path_guard(self):
         class FakeTool:
             def __init__(self, *args, **kwargs):
