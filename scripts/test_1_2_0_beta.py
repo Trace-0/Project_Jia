@@ -143,6 +143,18 @@ class Beta120StaticTests(unittest.TestCase):
         ]:
             self.assertIn(marker, discord_bot + config)
 
+    def test_llm_runtime_keeps_models_and_avoids_nested_event_loop(self):
+        langchain_llm = read_text("LLM/langchain_llm.py")
+        model_control = read_text("LLM/LLM_model_control.py")
+        importance = read_text("memory/calculate_importance.py")
+
+        self.assertIn("asyncio.run_coroutine_threadsafe", langchain_llm)
+        self.assertNotIn("run_until_complete", langchain_llm)
+        self.assertIn('kwargs["keep_alive"] = -1', model_control)
+        self.assertIn('kwargs["num_ctx"] = config.llmNumCtx', model_control)
+        self.assertIn('options={"num_ctx": config.llmNumCtx}', model_control)
+        self.assertIn("get_summary_chat_model", importance)
+
 
 class Beta120ConfigTests(unittest.TestCase):
     def test_config_defaults_include_beta_settings(self):

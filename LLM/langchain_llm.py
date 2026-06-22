@@ -1,5 +1,5 @@
 from config.config_manager import config
-from LLM.LLM_model_control import create_chat_model
+from LLM.LLM_model_control import create_chat_model, reset_cached_chat_models
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, trim_messages
@@ -105,8 +105,33 @@ def _build_voice_sys_prompt() -> str:
 sys_prompt = _build_sys_prompt()
 voice_sys_prompt = _build_voice_sys_prompt()
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
+_llm_loop = None
+_llm_loop_thread = None
+_llm_loop_lock = threading.Lock()
+
+def _start_llm_loop(event_loop: asyncio.AbstractEventLoop, ready: threading.Event):
+    asyncio.set_event_loop(event_loop)
+    ready.set()
+    event_loop.run_forever()
+
+def _ensure_llm_loop() -> asyncio.AbstractEventLoop:
+    """LLM/MCP async work runs on one background loop so Discord's loop is never nested."""
+    global _llm_loop, _llm_loop_thread
+    with _llm_loop_lock:
+        if _llm_loop is not None and _llm_loop.is_running():
+            return _llm_loop
+
+        _llm_loop = asyncio.new_event_loop()
+        ready = threading.Event()
+        _llm_loop_thread = threading.Thread(
+            target=_start_llm_loop,
+            args=(_llm_loop, ready),
+            name="jia-llm-async-loop",
+            daemon=True,
+        )
+        _llm_loop_thread.start()
+        ready.wait()
+        return _llm_loop
 
 def _approx_token_count(messages) -> int:
     """메시지 목록의 토큰 수를 '문자 수 ≈ 토큰 수'로 보수적으로 어림합니다.
@@ -139,8 +164,16 @@ def pre_agent_hook(state):
     return {"messages": trimmed_messages}
 
 def run_async(coro):
-    result = loop.run_until_complete(coro)
-    return result
+    event_loop = _ensure_llm_loop()
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if running_loop is event_loop:
+        raise RuntimeError("run_async cannot be called from the LLM background loop")
+
+    future = asyncio.run_coroutine_threadsafe(coro, event_loop)
+    return future.result()
 
 callagents = {}
 textagents = {}
@@ -152,6 +185,7 @@ def reload_llm():
     checkpointer는 유지되어 대화 기록은 보존됩니다.
     """
     global llm, sys_prompt, voice_sys_prompt
+    reset_cached_chat_models()
     llm = create_chat_model()
     sys_prompt = _build_sys_prompt()
     voice_sys_prompt = _build_voice_sys_prompt()
