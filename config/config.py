@@ -25,8 +25,16 @@ def DEFAULT_MCP_SERVERS() -> dict:
             "command": "uvx",
             "args": ["duckduckgo-mcp-server"],
             "transport": "stdio",
+            "description": "DuckDuckGo 검색으로 웹 검색 결과를 가져올 수 있습니다.",
+            "use_when": "최신 정보, 인터넷 확인이 필요한 사실, 지아가 확실히 모르는 외부 정보를 물어볼 때 사용합니다.",
         }
     }
+
+
+def DEFAULT_MUSIC_ALLOWED_URL_HOSTS() -> list[str]:
+    """기본으로 허용하는 /jiamusic URL 호스트."""
+    return ["youtube.com", "youtu.be"]
+
 
 # Config 필드 -> settings.toml의 {섹션: {필드명: (키, 주석)}} 매핑
 TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
@@ -45,6 +53,34 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "soundboard_auto_react": ("auto_react", "대화 상황에 맞는 효과음을 자동으로 재생할지 여부"),
         "soundboard_auto_react_cooldown_sec": ("auto_react_cooldown_sec", "같은 효과음 자동 재생 사이 최소 간격 (초)"),
         "soundboard_auto_react_chance": ("auto_react_chance", "자동 반응 후보가 잡혔을 때 실제로 재생할 확률 (0.0~1.0)"),
+    },
+    "music": {
+        "music_volume": ("volume", "음악 기본 볼륨 (0.0~1.0)"),
+        "music_duck_volume": ("duck_volume", "지아가 말하거나 효과음을 재생할 때 낮출 음악 볼륨 (0.0~1.0)"),
+        "music_max_playlist_items": ("max_playlist_items", "유튜브 재생목록에서 한 번에 추가할 최대 곡 수"),
+    },
+    "security": {
+        "command_whitelist_user_ids": (
+            "command_whitelist_user_ids",
+            "보호 명령 권한 우회 유저 ID 목록입니다.\n"
+            "여기에 Discord 유저 ID를 숫자로 등록하면 서버 권한과 관계없이 owner/admin 보호 명령을 사용할 수 있습니다.\n"
+            "예: command_whitelist_user_ids = [123456789012345678]",
+        ),
+        "music_allowed_url_hosts": (
+            "music_allowed_url_hosts",
+            "/jiamusic URL 입력에서 허용할 호스트 목록입니다.\n"
+            "URL은 여기에 등록된 호스트 또는 하위 도메인만 yt-dlp에 전달됩니다.\n"
+            "검색어 입력은 URL이 아니므로 받을 수 있지만, 검색 결과 URL도 이 목록을 통과해야 큐에 들어갑니다.\n"
+            "기본값은 youtube.com 하위 도메인과 youtu.be만 허용합니다.\n"
+            "예: music_allowed_url_hosts = [\"youtube.com\", \"youtu.be\"]",
+        ),
+        "allow_unsafe_jiaplay": (
+            "allow_unsafe_jiaplay",
+            "위험 기능: /jiaplay 로컬 파일 재생을 허용합니다.\n"
+            "이 값을 true로 바꾸면 Discord 명령을 입력할 수 있는 사람이 봇 PC에서 봇 프로세스 권한으로 읽을 수 있는 로컬 오디오 파일 경로를 지정할 수 있습니다.\n"
+            "사적인 오디오가 음성 채널에 노출될 수 있고, 큰 파일을 메모리에 읽어 봇이 느려지거나 중단될 수 있으며, 신뢰할 수 없는 미디어를 FFmpeg가 해석하면서 디코더 취약점이나 비정상 파일 오류에 노출될 수 있습니다.\n"
+            "개인 서버나 완전히 신뢰하는 사용자만 명령을 사용할 수 있는 환경에서만 true로 바꾸세요. 일반 음악 재생은 /jiamusic을 권장합니다.",
+        ),
     },
     "vad": {
         "vad_threshold": ("threshold", "발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감)"),
@@ -69,7 +105,7 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "llm_api_base": ("api_base", "LLM 서버/API 주소 재정의 (선택). ollama면 원격 Ollama 서버 주소, 외부 API면 OpenAI 호환 서버 등. 비우면 기본 주소(로컬, 또는 키만 있으면 Ollama Cloud) 사용"),
         "llmNumCtx": ("num_ctx", "LLM 컨텍스트 윈도우 크기(토큰). 대화 기록도 이 크기에 맞춰 유지됨. provider가 ollama일 때만 적용 (변경 시 자동 재로딩)"),
         "llmSystemPrompt": ("system_prompt", "지아의 성격/말투를 정의하는 시스템 프롬프트 (변경 시 자동 재로딩)"),
-        "llm_tools": ("tools", "연결할 MCP 서버 목록 (변경 시 자동 재연결). [llm.tools.서버이름] 테이블로 추가, 빈 테이블 {}이면 사용 안 함"),
+        "llm_tools": ("tools", "연결할 MCP 서버 목록 (변경 시 자동 재연결). [llm.tools.서버이름] 테이블로 추가하고, description/use_when에는 지아가 참고할 서버 설명을 적을 수 있음. 빈 테이블 {}이면 사용 안 함"),
         "llm_response_reserve_tokens": ("response_reserve_tokens", "컨텍스트 윈도우에서 응답 생성을 위해 남겨둘 토큰 여유분"),
     },
     "rag": {
@@ -87,13 +123,13 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     "comfyui": {
         "comfyui_url": ("url", "ComfyUI 서버 주소 (예: http://127.0.0.1:8188). 비워두면 이미지 생성 기능을 사용하지 않음 (선택 기능)"),
         "comfyui_checkpoint": ("checkpoint", "사용할 체크포인트 파일 이름 (ComfyUI의 models/checkpoints 안 파일명)"),
-        "comfyui_steps": ("steps", "이미지 생성 스텝 수 (Flux Schnell은 4, 일반 SD 모델은 20~30 권장)"),
-        "comfyui_cfg": ("cfg", "CFG 스케일 (Flux Schnell은 1.0, 일반 SD 모델은 7.0 권장)"),
+        "comfyui_steps": ("steps", "이미지 생성 스텝 수"),
+        "comfyui_cfg": ("cfg", "CFG 스케일"),
         "comfyui_width": ("width", "생성 이미지 가로 크기"),
         "comfyui_height": ("height", "생성 이미지 세로 크기"),
         "comfyui_sampler": ("sampler", "샘플러 이름 (예: euler)"),
-        "comfyui_scheduler": ("scheduler", "스케줄러 이름 (예: normal, Flux는 simple 권장)"),
-        "comfyui_negative_prompt": ("negative_prompt", "네거티브 프롬프트 (Flux 계열은 비워둠)"),
+        "comfyui_scheduler": ("scheduler", "스케줄러 이름"),
+        "comfyui_negative_prompt": ("negative_prompt", "네거티브 프롬프트"),
         "comfyui_timeout_sec": ("timeout_sec", "이미지 생성 대기 제한 시간 (초)"),
     },
     "settings": {
@@ -114,8 +150,21 @@ def _env_key(field_name: str) -> str:
     return ENV_PREFIX + re.sub(r"(?<!^)(?=[A-Z])", "_", field_name).upper()
 
 
+def _parse_string_list(raw: str) -> list[str]:
+    raw = raw.strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        return [str(v).strip() for v in json.loads(raw) if str(v).strip()]
+    return [v.strip() for v in raw.split(",") if v.strip()]
+
+
 def _parse_env_value(raw: str, f) -> object:
     """환경 변수(.env) 문자열 값을 필드 타입에 맞게 변환합니다. (.env 마이그레이션/환경 변수 오버라이드용)"""
+    if f.name == "command_whitelist_user_ids":
+        return [int(v) for v in _parse_string_list(raw)]
+    if f.name == "music_allowed_url_hosts":
+        return _parse_string_list(raw)
     if f.type is bool:
         return raw.strip().lower() in ("1", "true", "yes", "on")
     if f.type is float:
@@ -133,6 +182,20 @@ def _coerce_toml_value(value, f) -> object:
     """settings.toml에서 읽은 값을 필드 타입에 맞게 변환합니다."""
     if f.name == "debug_text_channel":
         return int(value) or None  # 0은 미설정으로 취급
+    if f.name == "command_whitelist_user_ids":
+        plain = value.unwrap() if hasattr(value, "unwrap") else value
+        if isinstance(plain, (list, tuple)):
+            return [int(v) for v in plain]
+        if isinstance(plain, str) and plain.strip():
+            return [int(v.strip()) for v in plain.split(",") if v.strip()]
+        return []
+    if f.name == "music_allowed_url_hosts":
+        plain = value.unwrap() if hasattr(value, "unwrap") else value
+        if isinstance(plain, (list, tuple)):
+            return [str(v).strip() for v in plain if str(v).strip()]
+        if isinstance(plain, str) and plain.strip():
+            return _parse_string_list(plain)
+        return []
     if f.name == "llm_tools":
         plain = value.unwrap() if hasattr(value, "unwrap") else value
         if isinstance(plain, dict):
@@ -184,6 +247,16 @@ class Config:
     soundboard_auto_react: bool = False
     soundboard_auto_react_cooldown_sec: int = 20
     soundboard_auto_react_chance: float = 0.35
+
+    # === 음악 재생/덕킹 (저장 즉시 반영) ===
+    music_volume: float = 0.7
+    music_duck_volume: float = 0.25
+    music_max_playlist_items: int = 50
+
+    # === 위험 기능 (저장 즉시 반영) ===
+    command_whitelist_user_ids: list[int] = field(default_factory=list)
+    music_allowed_url_hosts: list[str] = field(default_factory=DEFAULT_MUSIC_ALLOWED_URL_HOSTS)
+    allow_unsafe_jiaplay: bool = False
 
     # === VAD (저장 즉시 반영) ===
     vad_threshold: float = 0.7
@@ -342,7 +415,12 @@ class Config:
                 plain, item = self._toml_item(field_name)
                 if key not in table:
                     if comment:
-                        item.comment(comment)
+                        comment_lines = comment.splitlines()
+                        if len(comment_lines) == 1:
+                            item.comment(comment)
+                        else:
+                            for line in comment_lines:
+                                table.add(tomlkit.comment(line))
                     table[key] = item
                 elif table[key] != plain:
                     # 값이 바뀐 키만 갱신 (사용자가 직접 단 주석을 최대한 보존)

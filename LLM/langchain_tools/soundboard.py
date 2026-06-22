@@ -28,6 +28,11 @@ AUTO_REACTION_KEYWORDS = {
 
 _auto_reaction_lock = threading.Lock()
 _auto_reaction_last_played: dict[tuple[int, str], float] = {}
+_registry_lock = threading.Lock()
+_registry_version = 0
+_registry_snapshot: tuple[str, ...] | None = None
+_registry_watcher_started = False
+_registry_watcher_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,7 @@ class SoundEntry:
     auto: bool = True
     cooldown_sec: float | None = None
     chance: float | None = None
+    volume: float = 1.0
 
     def display_description(self) -> str:
         parts = []
@@ -45,6 +51,8 @@ class SoundEntry:
             parts.append(self.description)
         if self.tags:
             parts.append(f"tags={', '.join(self.tags)}")
+        if self.volume != 1.0:
+            parts.append(f"volume={self.volume:.2f}")
         return " / ".join(parts) if parts else "(설명 없음)"
 
 
@@ -93,6 +101,20 @@ def _as_float(value, default: float | None = None) -> float | None:
         return default
 
 
+def _clamp_volume(value) -> float:
+    volume = _as_float(value, 1.0)
+    if volume is None:
+        return 1.0
+    return max(0.0, min(1.0, volume))
+
+
+def _new_registry_entry():
+    entry = tomlkit.inline_table()
+    entry["desc"] = ""
+    entry["volume"] = 1.0
+    return entry
+
+
 def _entry_from_toml(file_name: str, raw_value) -> SoundEntry:
     raw = _unwrap_toml(raw_value)
     if isinstance(raw, dict):
@@ -107,16 +129,23 @@ def _entry_from_toml(file_name: str, raw_value) -> SoundEntry:
             auto=bool(raw.get("auto", True)),
             cooldown_sec=_as_float(raw.get("cooldown", raw.get("cooldown_sec"))),
             chance=chance,
+            volume=_clamp_volume(raw.get("volume", raw.get("vol"))),
         )
     return SoundEntry(file_name=file_name, description=str(raw_value or "").strip())
 
 
 def load_sound_registry() -> dict[str, SoundEntry]:
+    with _registry_lock:
+        return _load_sound_registry_locked()
+
+
+def _load_sound_registry_locked() -> dict[str, SoundEntry]:
     """폴더를 스캔해 {파일명: SoundEntry}를 반환합니다.
 
     설명이 아직 없는 새 파일은 sounds.toml에 빈 항목으로 자동 등록해,
     사용자가 파일을 넣은 뒤 설명만 채우면 되도록 합니다.
     """
+    global _registry_snapshot, _registry_version
     _ensure_soundboard_dir()
     try:
         doc = tomlkit.parse(REGISTRY_PATH.read_text(encoding="utf-8"))
@@ -124,17 +153,53 @@ def load_sound_registry() -> dict[str, SoundEntry]:
         logging.error(f"[Soundboard] sounds.toml을 읽지 못했어요: {e}")
         doc = tomlkit.document()
     files = _scan_audio_files()
+    snapshot = tuple(files)
+    if _registry_snapshot is None:
+        _registry_snapshot = snapshot
+    elif _registry_snapshot != snapshot:
+        _registry_snapshot = snapshot
+        _registry_version += 1
     new_files = [name for name in files if name not in doc]
     if new_files:
         for name in new_files:
-            doc[name] = ""
+            doc[name] = _new_registry_entry()
         try:
             REGISTRY_PATH.write_text(tomlkit.dumps(doc), encoding="utf-8")
+            _registry_version += 1
             logging.info(f"[Soundboard] 새 효과음 {len(new_files)}개를 sounds.toml에 등록했어요: {new_files}")
         except Exception as e:
             logging.error(f"[Soundboard] sounds.toml 저장 중 오류 발생: {e}")
     # 파일이 삭제된 항목은 목록에서 제외 (sounds.toml의 항목 자체는 보존)
     return {name: _entry_from_toml(name, doc.get(name, "")) for name in files}
+
+
+def get_sound_registry_version() -> int:
+    with _registry_lock:
+        return _registry_version
+
+
+def _sound_registry_watcher(interval_sec: float):
+    while True:
+        try:
+            load_sound_registry()
+        except Exception as e:
+            logging.error(f"[Soundboard] sounds.toml auto sync failed: {e}")
+        time.sleep(interval_sec)
+
+
+def start_soundboard_registry_watcher(interval_sec: float = 10.0):
+    """Keep sounds.toml in sync with files dropped into the soundboard folder."""
+    global _registry_watcher_started
+    with _registry_watcher_lock:
+        if _registry_watcher_started:
+            return
+        _registry_watcher_started = True
+        threading.Thread(
+            target=_sound_registry_watcher,
+            args=(interval_sec,),
+            name="jia-soundboard-registry-watcher",
+            daemon=True,
+        ).start()
 
 
 def _format_sound_list(sounds: dict[str, SoundEntry]) -> str:
@@ -232,7 +297,7 @@ def maybe_play_auto_reaction(guild_id: int, context: str) -> tuple[bool, str]:
     from discord_interface import pipeline
 
     logging.info(f"[Soundboard] 자동 반응 효과음 재생: {entry.file_name} (guild={guild_id}, score={best_score})")
-    ok, message = pipeline.play_sound_file(guild_id, str(path))
+    ok, message = pipeline.play_sound_file(guild_id, str(path), volume=entry.volume)
     if ok:
         with _auto_reaction_lock:
             _auto_reaction_last_played[key] = time.monotonic()
@@ -269,7 +334,8 @@ def soundboard_tool(guild_id: int) -> Tool:
             return f"'{matched}' 효과음은 재생할 수 없는 파일입니다."
 
         logging.info(f"[Soundboard] 효과음 재생 요청: {matched} (guild={guild_id})")
-        ok, message = pipeline.play_sound_file(guild_id, str(path))
+        entry = sounds[matched]
+        ok, message = pipeline.play_sound_file(guild_id, str(path), volume=entry.volume)
         if ok:
             return f"'{matched}' 효과음을 재생했습니다."
         return f"효과음을 재생하지 못했습니다: {message}"

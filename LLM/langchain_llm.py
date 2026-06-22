@@ -1,5 +1,5 @@
 from config.config_manager import config
-from LLM.LLM_model_control import create_chat_model
+from LLM.LLM_model_control import create_chat_model, reset_cached_chat_models
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, trim_messages
@@ -8,10 +8,10 @@ from langchain_core.tools import Tool
 from memory.RAG import RAG, get_rag_instance
 import logging
 from datetime import datetime
-from LLM.langchain_tools.mcp_manager import get_client
+from LLM.langchain_tools.mcp_manager import get_client, get_mcp_usage_guidance
 from memory.calculate_importance import calculate_and_save_importance
 from LLM.langchain_tools.load_discord_message import load_discord_message_tool
-from LLM.langchain_tools.soundboard import soundboard_tool
+from LLM.langchain_tools.soundboard import get_sound_registry_version, load_sound_registry, soundboard_tool
 from LLM.langchain_tools.comfyui_image import comfyui_image_tool, is_comfyui_enabled
 import asyncio
 import re
@@ -83,12 +83,19 @@ def _build_sys_prompt() -> str:
 
 사용할 수 있는 도구:
 - Conversation_Memory_Search: 과거 대화 기록 검색. 여기에는 너가 모르는 대화 기록이 저장되어 있으니, 이전에 있었던 일을 떠올려야 한다면 반드시 호출해.
-- 인터넷 검색 도구: 최신 정보나 네가 모르는 사실을 찾아야 할 때, 연결된 검색 도구를 호출해.
+- MCP 도구: 설정 파일에 연결된 외부 도구야. 각 도구 설명과 아래 MCP 서버 사용 가이드를 보고, 사용자가 요청한 일을 처리하는 데 필요할 때 호출해.
 - Current_Time: 응답에 현재 시간 정보가 필요할 때 호출해.
 - get_discord_message: 디스코드 채널의 메시지나 이미지를 불러올 때 호출해.
 - play_soundboard: 대화 상황에 어울리는 효과음을 음성 채널에서 재생할 때 호출해. 도구 설명에 있는 효과음만 재생할 수 있어."""
     if is_comfyui_enabled():
         prompt += "\n- generate_image: 사용자가 그림이나 이미지를 그려달라고 할 때 호출해. prompt에는 영어 프롬프트를, wait_message에는 그리는 동안 채널에 먼저 보여줄 짧은 안내 문구를 너의 말투로 넣어. model_id에는 도구 설명에 있는 모델 프로필 중 상황에 맞는 ID를 넣고, 애매하면 비워둬. 안내 문구가 먼저 올라가고 생성이 끝나면 그 메시지가 그림으로 바뀌니, 호출 결과를 받은 뒤에 그림이 완성됐다고 자연스럽게 알려주면 돼."
+    mcp_guidance = get_mcp_usage_guidance()
+    if mcp_guidance:
+        prompt += (
+            "\n\n설정 파일에 적힌 MCP 서버 사용 가이드:\n"
+            f"{mcp_guidance}\n"
+            "이 가이드는 어떤 MCP 도구를 고려할지 판단하는 힌트야. 실제 호출할 때는 현재 제공된 도구 이름과 각 도구 설명을 기준으로 선택해."
+        )
     return prompt
 
 def _build_voice_sys_prompt() -> str:
@@ -98,8 +105,33 @@ def _build_voice_sys_prompt() -> str:
 sys_prompt = _build_sys_prompt()
 voice_sys_prompt = _build_voice_sys_prompt()
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
+_llm_loop = None
+_llm_loop_thread = None
+_llm_loop_lock = threading.Lock()
+
+def _start_llm_loop(event_loop: asyncio.AbstractEventLoop, ready: threading.Event):
+    asyncio.set_event_loop(event_loop)
+    ready.set()
+    event_loop.run_forever()
+
+def _ensure_llm_loop() -> asyncio.AbstractEventLoop:
+    """LLM/MCP async work runs on one background loop so Discord's loop is never nested."""
+    global _llm_loop, _llm_loop_thread
+    with _llm_loop_lock:
+        if _llm_loop is not None and _llm_loop.is_running():
+            return _llm_loop
+
+        _llm_loop = asyncio.new_event_loop()
+        ready = threading.Event()
+        _llm_loop_thread = threading.Thread(
+            target=_start_llm_loop,
+            args=(_llm_loop, ready),
+            name="jia-llm-async-loop",
+            daemon=True,
+        )
+        _llm_loop_thread.start()
+        ready.wait()
+        return _llm_loop
 
 def _approx_token_count(messages) -> int:
     """메시지 목록의 토큰 수를 '문자 수 ≈ 토큰 수'로 보수적으로 어림합니다.
@@ -132,11 +164,21 @@ def pre_agent_hook(state):
     return {"messages": trimmed_messages}
 
 def run_async(coro):
-    result = loop.run_until_complete(coro)
-    return result
+    event_loop = _ensure_llm_loop()
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if running_loop is event_loop:
+        raise RuntimeError("run_async cannot be called from the LLM background loop")
+
+    future = asyncio.run_coroutine_threadsafe(coro, event_loop)
+    return future.result()
 
 callagents = {}
 textagents = {}
+callagent_sound_versions = {}
+textagent_sound_versions = {}
 
 def reload_llm():
     """reload된 config로 LLM과 시스템 프롬프트를 다시 만들고 에이전트 캐시를 비웁니다.
@@ -145,11 +187,14 @@ def reload_llm():
     checkpointer는 유지되어 대화 기록은 보존됩니다.
     """
     global llm, sys_prompt, voice_sys_prompt
+    reset_cached_chat_models()
     llm = create_chat_model()
     sys_prompt = _build_sys_prompt()
     voice_sys_prompt = _build_voice_sys_prompt()
     callagents.clear()
     textagents.clear()
+    callagent_sound_versions.clear()
+    textagent_sound_versions.clear()
     logging.info(f"[LLM:Reloader] LLM({config.llmModel})과 시스템 프롬프트를 다시 불러왔어요.")
 
 def _get_mcp_tools() -> list:
@@ -160,9 +205,19 @@ def _get_mcp_tools() -> list:
         logging.error(f"[LLM:MCP] MCP 도구를 불러오지 못했어요. [llm] tools 설정과 서버 상태를 확인해주세요.\n   -> {e}")
         return []
 
+def _soundboard_cache_version() -> int:
+    try:
+        load_sound_registry()
+        return get_sound_registry_version()
+    except Exception as e:
+        logging.error(f"[Soundboard] sounds.toml sync failed: {e}")
+        return -1
+
+
 def get_agent_for_guild(guild_id: int, is_text: bool):
+    sound_version = _soundboard_cache_version()
     if is_text:
-        if guild_id not in textagents:
+        if guild_id not in textagents or textagent_sound_versions.get(guild_id) != sound_version:
             _time = time_tool()
             tools = _get_mcp_tools() + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
             if is_comfyui_enabled():
@@ -175,9 +230,10 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
                 pre_model_hook=pre_agent_hook
             )
             textagents[guild_id] = react_agent
+            textagent_sound_versions[guild_id] = sound_version
         return textagents[guild_id]
     else:
-        if guild_id not in callagents:
+        if guild_id not in callagents or callagent_sound_versions.get(guild_id) != sound_version:
             _time = time_tool()
             # 음성도 텍스트와 동일하게 MCP 도구를 사용. 다만 voice_sys_prompt로 도구 사용을 자제시킴.
             tools = _get_mcp_tools() + create_rag_tool_for_guild(guild_id) + [_time, load_discord_message_tool(guild_id), soundboard_tool(guild_id)]
@@ -191,6 +247,7 @@ def get_agent_for_guild(guild_id: int, is_text: bool):
                 pre_model_hook=pre_agent_hook
             )
             callagents[guild_id] = call_react_agent
+            callagent_sound_versions[guild_id] = sound_version
         return callagents[guild_id]
 
 # === 오래 걸리는 도구 호출 시 대기 안내 ===

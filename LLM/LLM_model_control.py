@@ -1,6 +1,7 @@
 import ollama
 import logging
 import os
+import threading
 from config.config_manager import config
 from langchain_ollama.chat_models import ChatOllama
 
@@ -28,6 +29,9 @@ def _provider() -> str:
 # Ollama Cloud(https://ollama.com)의 기본 주소. provider=ollama인데 api_key가 있고
 # api_base를 지정하지 않으면 클라우드를 사용하는 것으로 보고 이 주소로 연결합니다.
 OLLAMA_CLOUD_URL = "https://ollama.com"
+_summary_model = None
+_summary_model_signature = None
+_summary_model_lock = threading.Lock()
 
 
 def using_ollama() -> bool:
@@ -76,6 +80,16 @@ def _ollama_client():
     return ollama.Client(**client_kwargs)
 
 
+def _chat_model_signature() -> tuple:
+    return (
+        _provider(),
+        config.llmModel,
+        (config.llm_api_base or "").strip(),
+        (config.llm_api_key or "").strip(),
+        config.llmNumCtx,
+    )
+
+
 def create_chat_model(*, for_agent: bool = True):
     """설정에 맞는 LangChain 채팅 모델을 생성합니다.
 
@@ -93,9 +107,8 @@ def create_chat_model(*, for_agent: bool = True):
         if headers:
             # client_kwargs는 내부 ollama 클라이언트로 전달됨 (클라우드 Bearer 인증)
             kwargs["client_kwargs"] = {"headers": headers}
-        if for_agent:
-            kwargs["keep_alive"] = -1
-            kwargs["num_ctx"] = config.llmNumCtx
+        kwargs["keep_alive"] = -1
+        kwargs["num_ctx"] = config.llmNumCtx
         return ChatOllama(**kwargs)
 
     provider = _provider()
@@ -127,6 +140,24 @@ def create_chat_model(*, for_agent: bool = True):
         )
 
 
+def get_summary_chat_model():
+    """Reuse the memory-summary model so each response does not rebuild this LLM path."""
+    global _summary_model, _summary_model_signature
+    signature = _chat_model_signature()
+    with _summary_model_lock:
+        if _summary_model is None or _summary_model_signature != signature:
+            _summary_model = create_chat_model(for_agent=False)
+            _summary_model_signature = signature
+        return _summary_model
+
+
+def reset_cached_chat_models():
+    global _summary_model, _summary_model_signature
+    with _summary_model_lock:
+        _summary_model = None
+        _summary_model_signature = None
+
+
 def unload_ollama_model(model_name: str):
     """지정된 Ollama 모델을 메모리에서 언로드합니다.
 
@@ -148,5 +179,5 @@ def load_ollama_model(model_name: str):
     if not using_ollama() or _ollama_authenticated():
         return
     logging.info(f"[LLM:Load] \"{model_name}\" 모델 로드 요청!")
-    response = _ollama_client().generate(model=model_name, keep_alive=-1)
+    response = _ollama_client().generate(model=model_name, keep_alive=-1, options={"num_ctx": config.llmNumCtx})
     logging.info(f"[LLM:Load] 응답 수신(done_reason={response.get('done_reason')}). 모델이 메모리에 로드됩니다.")

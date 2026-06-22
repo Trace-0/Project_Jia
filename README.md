@@ -13,10 +13,11 @@ AI bot that can chat and converse on Discord
 - 모르는 내용이 있으면 언제든 인터넷에서 정보를 검색할 수 있어요.
 - 이전 대화를 기억하고 활용할 수 있어요. (서버별로 기억해서 다른 서버에서 기억에 대해 물어보면 곤란해할 수 있어요.)
 - 사람처럼 기억을 잊기도 해요. 중요하지 않은 기억은 시간이 지나면 흐려지다 사라지고, 자주 꺼내 본 기억은 더 오래 남아요.
-- 대화하면서 알게 된 여러분에 대한 사실(취향, 관계 등)을 사람별로 기억해요. (`/jiamemory profile`로 확인할 수 있어요.)
+- 대화하면서 알게 된 여러분에 대한 사실(취향, 관계 등)을 사람별로 기억해요. 내 기억 상태와 프로필은 `/jiamemory status`로 확인할 수 있어요.
 - 기억되는 게 싫다면 `/jiamemory optout`으로 거부할 수 있어요. 거부한 사용자는 대화 기록과 프로필 저장에서 제외돼요.
 - 음성 채널이 한동안 조용하면 지아가 먼저 말을 걸어볼 수도 있어요. (기본은 꺼져 있고, `proactive_idle_sec` 설정으로 켤 수 있어요.)
 - 사운드보드 효과음을 대화 상황에 맞춰 직접 고르거나, 설정에 따라 자동으로 짧게 반응하게 할 수 있어요.
+- 음성 채널에서 유튜브 음악이나 재생목록을 재생하고, 지아가 말할 때는 음악 볼륨을 자동으로 낮출 수 있어요.
 - (선택 기능) 로컬에서 ComfyUI를 사용하고 있다면, 지아에게 그림을 그려달라고 할 수 있어요! 상황별 모델 프로필을 등록해두면 그림 종류에 맞는 모델을 골라 사용할 수 있어요. (`settings.toml`의 `[comfyui]` 항목을 설정해야 해요. 설정하지 않으면 이 기능은 완전히 비활성화돼요.)
 - 이 모든걸 로컬 환경에서 작동할 수 있어요. 외부로의 데이터 이동이 없어 유출 걱정없이 사용할 수 있어요.
 - (선택) 원한다면 OpenAI·Anthropic 같은 외부 LLM API나 Ollama Cloud를 대신 사용할 수도 있어요. (`settings.toml`의 `[llm]` 항목을 바꾸면 돼요. 다만 이 경우 대화 내용이 외부로 전송돼요.)
@@ -108,24 +109,29 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `/jia [내용]` , `/지아 [내용]` | 이 커맨드 뒤에 적히는 내용은 지아가 대답해줘요! 예) /지아 안녕? |
 | `/jiajoin` | 지아가 통화방에 들어와요! |
 | `/jialeave` | 지아가 통화방에서 나가요. :( |
-| `/jiareload` | 지아의 설정을 다시 불러와요. |
-| `/jiasavesetting` | 현재 지아의 설정을 `settings.toml`에 저장해요. |
-| `/jiaunloadmodel` | 현재 로드된 LLM 모델을 언로드해요. |
+| `/jiareload` | 지아의 설정을 다시 불러와요. 봇 소유자/화이트리스트 전용이에요. |
+| `/jiasavesetting` | 현재 지아의 설정을 `settings.toml`에 저장해요. 봇 소유자/화이트리스트 전용이에요. |
+| `/jiaunloadmodel` | 현재 로드된 LLM 모델을 언로드해요. 봇 소유자/화이트리스트 전용이에요. |
 | `/jiaping` | 지아가 "pong!" 메시지를 보내요. |
 | `/jiasay [문장]` | 지아가 [문장] 부분을 읽어줘요. |
-| `/jiahear (채널ID)` | 지아가 듣는 내용을 (채널ID)에 적어줘요. (채널ID)를 입력하지 않으면 debug text channel에 적어줘요. |
+| `/jiahear (채널ID)` | 지아가 듣는 내용을 (채널ID)에 적어줘요. (채널ID)를 입력하지 않으면 debug text channel에 적어줘요. 서버 관리자/화이트리스트 전용이에요. |
 | `/jiastop` | 현재 지아가 재생중인 음성을 멈춰요. |
+| `/jiaplay <로컬 파일 경로>` | 봇 PC의 로컬 오디오 파일을 재생해요. 보안상 위험해서 기본 비활성화되어 있고, 설정을 켠 뒤에도 봇 소유자/화이트리스트 전용이에요. |
 | `/jiajoinnoagent` | 지아가 통화방에 들어와요. 하지만, 아무 기능도 작동하지 않아요. |
-| `/jiatalk` | 해당 채널에서 작성하는 모든 대화는 지아가 대답해줘요. 이제 `/jia`나 `/지아`를 입력하지 않아도 괜찮아요. |
-| `/jiastoptalk` | `/jiatalk` 기능을 멈춰요. |
-| `/jiarestart` | 지아가 재시작돼요. 재시작이 필요한 설정을 바꿨을 때 사용해요. |
-| `/jiamemory list (페이지)` | 이 서버에 저장된 기억을 최신순으로 보여줘요. |
-| `/jiamemory search [검색어]` | 저장된 기억을 유사도로 검색해요. |
-| `/jiamemory delete [ID]` | 해당 ID로 시작하는 기억을 삭제해요. (ID는 list/search에서 확인) |
-| `/jiamemory profile (이름)` | 지아가 그 사용자에 대해 기억하고 있는 사실을 보여줘요. (이름 생략 시 본인) |
+| `/jiatalk` | 해당 채널에서 작성하는 모든 대화는 지아가 대답해줘요. 이제 `/jia`나 `/지아`를 입력하지 않아도 괜찮아요. 서버 관리자/화이트리스트 전용이에요. |
+| `/jiastoptalk` | `/jiatalk` 기능을 멈춰요. 서버 관리자/화이트리스트 전용이에요. |
+| `/jiamusic play <유튜브 URL/재생목록/검색어>` | 기존 대기열을 바꾸고 유튜브 음악을 재생해요. 지아가 말할 때는 자동으로 음악 볼륨이 낮아져요. |
+| `/jiamusic queue <유튜브 URL/재생목록/검색어>` | 현재 음악 대기열 뒤에 곡이나 재생목록을 추가해요. |
+| `/jiamusic stop/skip/pause/resume/status` | 배경 음악을 멈추거나 다음 곡으로 넘기고, 일시정지/재개/상태 확인을 해요. |
+| `/jiamusic volume <0.0~1.0>` | 배경 음악 볼륨을 조절해요. |
+| `/jiarestart` | 지아가 재시작돼요. 재시작이 필요한 설정을 바꿨을 때 사용해요. 봇 소유자/화이트리스트 전용이에요. |
+| `/jiamemory list (페이지)` | 이 서버에 저장된 기억을 최신순으로 보여줘요. 서버 관리자/화이트리스트 전용이에요. |
+| `/jiamemory search [검색어]` | 저장된 기억을 유사도로 검색해요. 서버 관리자/화이트리스트 전용이에요. |
+| `/jiamemory delete [ID]` | 해당 ID로 시작하는 기억을 삭제해요. (ID는 list/search에서 확인) 서버 관리자/화이트리스트 전용이에요. |
+| `/jiamemory profile (이름)` | 지아가 그 사용자에 대해 기억하고 있는 사실을 보여줘요. 서버 관리자/화이트리스트 전용이에요. |
 | `/jiamemory optout` | 지아가 나에 대한 대화와 정보를 기억하지 않게 해요. 기존 프로필과 단독 대화 기억도 함께 삭제돼요. |
 | `/jiamemory optin` | 기억 기능을 다시 켜요. |
-| `/jiamemory status` | 내 기억 설정 상태(거부 여부, 프로필 개수 등)를 확인해요. |
+| `/jiamemory status` | 내 기억 설정 상태와 내 프로필 내용을 확인해요. |
 
 
 # 2-1. 설정(settings.toml) 항목
@@ -148,6 +154,12 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[soundboard]` `auto_react` | `false` | 대화 상황에 맞는 효과음을 자동으로 재생할지 여부 | 즉시 |
 | `[soundboard]` `auto_react_cooldown_sec` | `20` | 같은 효과음이 자동으로 다시 재생되기까지의 최소 간격 | 즉시 |
 | `[soundboard]` `auto_react_chance` | `0.35` | 자동 반응 후보가 잡혔을 때 실제로 재생할 확률 | 즉시 |
+| `[music]` `volume` | `0.7` | 배경 음악 기본 볼륨 | 즉시 |
+| `[music]` `duck_volume` | `0.25` | 지아가 말하거나 효과음이 재생될 때 낮출 음악 볼륨 | 즉시 |
+| `[music]` `max_playlist_items` | `50` | 유튜브 재생목록에서 한 번에 추가할 최대 곡 수 | 즉시 |
+| `[security]` `command_whitelist_user_ids` | `[]` | 보호 명령 권한을 우회할 Discord 유저 ID 목록 | 즉시 |
+| `[security]` `music_allowed_url_hosts` | `["youtube.com", "youtu.be"]` | `/jiamusic` URL 입력에서 허용할 호스트 목록 | 즉시 |
+| `[security]` `allow_unsafe_jiaplay` | `false` | 위험 기능인 `/jiaplay` 로컬 파일 재생을 허용할지 여부 | 즉시 |
 | `[vad]` `threshold` | `0.7` | 발화로 판정할 확률 임계값 (0.0~1.0, 낮을수록 민감) | 즉시 |
 | `[vad]` `min_speech_ms` | `150` | 이보다 짧은 발화 구간은 무시해요 | 즉시 |
 | `[vad]` `min_silence_ms` | `1000` | 발화 구간 분리에 필요한 최소 무음 시간 | 즉시 |
@@ -243,14 +255,20 @@ api_key = "..."          # https://ollama.com/settings/keys 에서 발급
 command = "uvx"
 args = ["duckduckgo-mcp-server"]
 transport = "stdio"
+description = "DuckDuckGo 검색으로 웹 검색 결과를 가져올 수 있습니다."
+use_when = "최신 정보, 인터넷 확인이 필요한 사실, 지아가 확실히 모르는 외부 정보를 물어볼 때 사용합니다."
 
 # 원격/로컬 HTTP 서버를 연결하는 예시
 [llm.tools.my-server]
 url = "http://localhost:9000/mcp"
 transport = "streamable_http"
+description = "내 서비스의 주문, 재고, 사용자 정보를 조회할 수 있습니다."
+use_when = "사용자가 내 서비스 데이터 조회나 운영 상태 확인을 부탁할 때 사용합니다."
 ```
 
 - 저장하면 재시작 없이 자동으로 다시 연결돼요.
+- `description`과 `use_when`은 MCP 서버로 전달되지 않고, 지아가 어떤 상황에서 해당 MCP 도구를 고려해야 하는지 판단하는 안내문으로만 사용돼요.
+- 실제 연결 설정에는 `command`, `args`, `transport`, `url`처럼 `MultiServerMCPClient`가 이해하는 값을 적고, 설명용 메타데이터는 `description`, `use_when`에 적어주세요.
 - MCP를 아예 사용하지 않으려면 `tools = {}`로 적어주세요.
 - 서버 연결에 실패해도 지아의 대화는 정상 동작하고, 해당 도구만 빠져요.
 
@@ -320,8 +338,8 @@ auto_react_cooldown_sec = 20
 auto_react_chance = 0.35
 
 # soundboard/sounds.toml
-"tada.mp3" = { desc = "축하하거나 성공했을 때 쓰는 팡파레", tags = ["success", "celebrate"], cooldown = 20, chance = 0.8 }
-"fail.wav" = { desc = "실패하거나 아쉬운 상황의 효과음", tags = ["fail", "awkward"], cooldown = 30, chance = 0.5 }
+"tada.mp3" = { desc = "축하하거나 성공했을 때 쓰는 팡파레", tags = ["success", "celebrate"], cooldown = 20, chance = 0.8, volume = 0.8 }
+"fail.wav" = { desc = "실패하거나 아쉬운 상황의 효과음", tags = ["fail", "awkward"], cooldown = 30, chance = 0.5, volume = 0.6 }
 "laugh.wav" = { desc = "웃긴 드립이나 농담에 쓰는 웃음 효과음", tags = ["laugh"], auto = true }
 "secret.wav" = { desc = "수동으로만 쓰고 싶은 효과음", auto = false }
 ```
@@ -329,6 +347,7 @@ auto_react_chance = 0.35
 - `tags`: 자동 반응에 사용할 상황 태그예요. `success`, `celebrate`, `fail`, `awkward`, `laugh`, `surprise`, `sad`, `angry` 같은 태그를 인식해요.
 - `cooldown`: 해당 효과음이 자동으로 다시 재생되기까지의 최소 간격이에요. 생략하면 `[soundboard] auto_react_cooldown_sec`를 따라가요.
 - `chance`: 후보로 잡혔을 때 실제로 재생할 확률이에요. 생략하면 `[soundboard] auto_react_chance`를 따라가요.
+- `volume`: 효과음 자체 볼륨이에요. `0.0`부터 `1.0` 사이 숫자로 지정하고, 생략하면 `1.0`을 사용해요.
 - `auto = false`: 자동 반응에서는 제외하고, 지아가 직접 `play_soundboard` 도구를 쓸 때만 재생할 수 있게 해요.
 
 > [!note]
@@ -336,6 +355,68 @@ auto_react_chance = 0.35
 
 > [!tip]
 > 파일을 새로 넣으면 다음 도구 호출 때 바로 재생할 수 있지만, 지아가 효과음 목록을 새로 인지하게 하려면 `/jiareload`를 한 번 실행해주는 것이 좋아요.
+
+
+# 2-4. 보호 명령과 화이트리스트
+
+일부 명령은 서버 전체 동작, 기억 조회/삭제, 로컬 파일 접근에 영향을 주므로 권한이 필요해요. `owner` 보호 명령은 Discord 봇 소유자 또는 `[security] command_whitelist_user_ids`에 등록된 유저만 사용할 수 있고, `admin` 보호 명령은 서버 관리자/서버 관리 권한자 또는 화이트리스트 유저가 사용할 수 있어요.
+
+```toml
+[security]
+command_whitelist_user_ids = [123456789012345678]
+```
+
+- `owner` 보호 명령: `/jiareload`, `/jiasavesetting`, `/jiaunloadmodel`, `/jiarestart`, `/jiaplay`
+- `admin` 보호 명령: `/jiahear`, `/jiatalk`, `/jiastoptalk`, `/jiamemory list`, `/jiamemory search`, `/jiamemory delete`, `/jiamemory profile`
+- 일반 사용자 명령: `/jia`, `/지아`, `/jiajoin`, `/jialeave`, `/jiajoinnoagent`, `/jiaping`, `/jiasay`, `/jiastop`, `/jiamusic ...`, `/jiamemory optout`, `/jiamemory optin`, `/jiamemory status`
+
+화이트리스트는 Discord 서버 권한과 무관하게 보호 명령을 허용하는 우회 목록이므로, 실제로 봇 운영을 맡길 사람의 ID만 등록하는 것을 권장해요. `/jiaplay`는 화이트리스트나 봇 소유자 권한이 있어도 `[security] allow_unsafe_jiaplay = true`를 켜야 실제로 재생됩니다.
+
+
+# 2-5. 위험 기능: /jiaplay 로컬 파일 재생
+
+`/jiaplay <로컬 파일 경로>`는 봇이 실행 중인 컴퓨터의 로컬 오디오 파일을 직접 읽어서 음성 채널에 재생하는 기능이에요. 이 기능은 편하지만 보안상 위험해서 기본값으로 꺼져 있습니다.
+
+```toml
+[security]
+allow_unsafe_jiaplay = true
+```
+
+이 설정을 켜면 Discord에서 명령을 입력할 수 있는 사람이 봇 프로세스 권한으로 접근 가능한 로컬 파일 경로를 지정할 수 있어요. 오디오 파일에 사적인 내용이 들어 있으면 그 내용이 음성 채널로 그대로 나가고, 아주 큰 파일을 지정하면 파일 전체를 메모리에 읽으면서 봇이 느려지거나 중단될 수 있어요. 또한 신뢰할 수 없는 미디어 파일을 FFmpeg가 해석하게 되므로, 디코더 취약점이나 비정상 파일로 인한 오류 가능성도 생깁니다.
+
+따라서 이 설정은 개인 서버나 완전히 신뢰하는 사용자만 명령을 쓸 수 있는 환경에서만 켜는 것을 권장해요. 일반적인 음악 재생은 `/jiamusic`의 유튜브 재생 기능을 사용하는 편이 더 안전합니다.
+
+
+# 2-6. 배경 음악과 덕킹
+
+`/jiamusic` 명령어로 음성 채널에 유튜브 음악을 틀 수 있어요. `yt-dlp`로 유튜브 단일 영상, 재생목록 URL, 검색어를 받아 재생 큐로 만들고, 각 곡을 재생할 때 실제 오디오 스트림 URL을 가져옵니다. 음악이 재생되는 동안 지아가 TTS로 대답하거나 사운드보드 효과음을 재생하면, 음악 볼륨이 자동으로 `[music] duck_volume`까지 낮아지고 foreground 재생이 끝나면 원래 볼륨으로 돌아갑니다.
+
+보안을 위해 `/jiamusic`에 URL을 직접 넣는 경우 `[security] music_allowed_url_hosts`에 등록된 호스트만 `yt-dlp`로 전달돼요. 기본값은 `youtube.com` 하위 도메인과 `youtu.be`만 허용합니다. 검색어 입력은 URL이 아니므로 계속 받을 수 있지만, 검색 결과 URL도 허용 호스트 목록을 통과해야 큐에 들어갑니다. `https://example.com/...`, `file://...`, `http://127.0.0.1/...` 같은 임의 URL은 차단됩니다.
+
+```toml
+[security]
+music_allowed_url_hosts = ["youtube.com", "youtu.be"]
+```
+
+```text
+/jiamusic play https://www.youtube.com/watch?v=...
+/jiamusic play https://www.youtube.com/playlist?list=...
+/jiamusic play lofi hip hop radio
+/jiamusic queue 신나는 게임 bgm
+/jiamusic skip
+/jiamusic volume 0.6
+/jiamusic pause
+/jiamusic resume
+/jiamusic stop
+/jiamusic status
+```
+
+음악과 지아의 목소리는 내부 오디오 믹서에서 함께 PCM으로 합쳐져 Discord에 전송돼요. 그래서 음악이 흐르는 중에도 대화 응답이 큐에 막히지 않고, 지아가 말할 때 음악이 작아지는 라디오 진행자 같은 동작을 할 수 있어요.
+
+재생목록은 기본적으로 최대 50곡까지만 한 번에 추가해요. 더 길게 받고 싶다면 `settings.toml`의 `[music] max_playlist_items` 값을 바꿔주세요.
+
+> [!note]
+> `/jiastop`은 지아의 TTS와 효과음 같은 foreground 재생만 멈춰요. 배경 음악을 멈추려면 `/jiamusic stop`을 사용해주세요.
 
 
 # 3. 현재 발견된 문제
@@ -384,7 +465,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 13. `/jiarestart` 명령어를 추가했습니다. 재시작이 필요한 설정(`[rag] embedding_model` 등)을 바꿨을 때 사용할 수 있습니다.
 14. 프로그램 업데이트로 새 설정 항목이 추가되면 다음 실행 때 기본값이 `settings.toml`에 자동으로 채워집니다.
 15. 기억을 사람처럼 잊는 망각 시스템을 추가했습니다. 중요도가 낮은 기억은 마지막으로 사용된 뒤 시간이 지날수록 흐려지다가 기준 미만이 되면 삭제되고, 검색에 실제로 쓰인 기억은 중요도가 조금씩 올라가 더 오래 유지됩니다. (감쇠량/삭제 기준/보정량은 `[rag]` 설정으로 조절 가능)
-16. `/jiamemory` 명령어를 추가했습니다. 서버에 저장된 기억을 목록으로 보거나(`list`) 검색하고(`search`) 삭제할 수 있으며(`delete`), 사용자별 프로필 조회(`profile`)와 기억 설정 상태 확인(`status`)도 가능합니다.
+16. `/jiamemory` 명령어를 추가했습니다. 서버에 저장된 기억을 목록으로 보거나(`list`) 검색하고(`search`) 삭제할 수 있으며(`delete`), 사용자별 프로필 조회(`profile`)와 기억 설정 상태 확인(`status`)도 가능합니다. 현재 `profile`은 서버 관리자 전용이고, 일반 사용자는 `status`로 본인 프로필을 확인합니다.
 17. 대화에서 알게 된 사용자에 대한 장기적인 사실(취향, 관계 등)을 사람별 프로필로 기억하고, 이후 대화에 자동으로 참고합니다. 대화 요약 과정에서 함께 추출되어 추가 LLM 호출 없이 저장됩니다.
 18. 기억 사용을 거부할 수 있는 기능을 추가했습니다. `/jiamemory optout`을 입력한 사용자는 이후 대화 저장과 프로필 추출에서 제외되며, 기존 프로필과 단독 대화 기억도 삭제됩니다. (`optin`으로 다시 켤 수 있습니다)
 19. [음성] 먼저 말 걸기 기능을 추가했습니다. 음성 채널이 일정 시간(`[voice] proactive_idle_sec`, 기본 0=꺼짐) 동안 조용하면 지아가 이전 대화나 기억을 활용해 먼저 말을 걸어봅니다. 기존 발화 처리 구조를 그대로 따르므로 실제 대화와 충돌하지 않습니다.
@@ -397,8 +478,16 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 26. LLM을 로컬 Ollama 대신 외부 API(OpenAI, Anthropic, Google 등)로도 사용할 수 있게 했습니다. `settings.toml`의 `[llm] provider`/`api_key`/`api_base`로 설정하며, 기본값은 로컬 `ollama`라 기존 사용자에게는 영향이 없습니다. 자세한 방법은 [외부 LLM API 사용](#외부-llm-api-사용) 항목을 참고하세요. (단, 외부 API 사용 시 대화 내용이 외부로 전송됩니다)
 27. `provider`를 `ollama`로 둔 채 `[llm] api_base`에 주소를 적으면, 다른 컴퓨터나 다른 포트에서 돌아가는 원격 Ollama 서버에도 연결할 수 있습니다. 모델 로드/언로드도 해당 서버를 향합니다.
 28. Ollama Cloud(https://ollama.com)를 지원합니다. `provider`를 `ollama`로 둔 채 `[llm] api_key`에 Ollama API 키만 넣으면 자동으로 클라우드(`https://ollama.com`)에 Bearer 인증으로 연결되어, 강력한 로컬 GPU 없이도 큰 모델을 쓸 수 있습니다. (이 경우 모델 로드/언로드는 클라우드가 관리하므로 건너뜁니다)
-29. 사운드보드 자동 반응 기능을 추가했습니다. `[soundboard] auto_react`를 켜면 대화 문맥과 `sounds.toml`의 태그를 바탕으로 효과음을 짧게 자동 재생하며, 효과음별 `cooldown`, `chance`, `auto` 설정으로 과한 재생을 막을 수 있습니다.
+29. 사운드보드 자동 반응 기능을 추가했습니다. `[soundboard] auto_react`를 켜면 대화 문맥과 `sounds.toml`의 태그를 바탕으로 효과음을 짧게 자동 재생하며, 효과음별 `cooldown`, `chance`, `auto`, `volume` 설정으로 과한 재생과 볼륨을 조절할 수 있습니다.
 30. ComfyUI 이미지 생성에서 상황별 모델 프로필을 지원합니다. `[comfyui.models.<ID>]`에 체크포인트와 `use_when`/`tags`를 등록하면 지아가 이미지 종류에 맞는 `model_id`를 선택해 생성합니다.
+31. [음성] 배경 음악 재생 명령어 `/jiamusic`를 추가했습니다. stop/pause/resume/volume/status 제어를 지원합니다.
+32. [음성] 오디오 믹서를 추가해 배경 음악과 TTS/효과음을 함께 출력합니다. 지아가 말하거나 효과음을 재생하는 동안 음악 볼륨을 `[music] duck_volume`으로 낮추고, 끝나면 기존 음악 볼륨으로 복구합니다.
+33. [음성] `/jiamusic`가 로컬 파일 직접 재생 대신 `yt-dlp` 기반 유튜브 재생을 사용합니다. 유튜브 단일 영상, 검색어, 재생목록을 지원하고 `queue`/`skip`으로 대기열을 제어할 수 있습니다.
+34. [보안] `/jiaplay` 로컬 파일 재생은 기본 비활성화했습니다. Discord 명령으로 봇 PC의 로컬 파일을 읽어 음성 채널에 내보낼 수 있는 위험 기능이므로 `[security] allow_unsafe_jiaplay = true`를 명시적으로 설정한 경우에만 작동합니다.
+35. [보안] `/jiamemory profile`은 서버 관리자 전용으로 변경하고, 일반 사용자는 `/jiamemory status`에서 본인의 기억 설정과 프로필 내용을 함께 확인하도록 변경했습니다.
+36. [보안] 보호 명령 권한 체계를 추가했습니다. owner/admin 보호 명령은 권한을 확인하고, `[security] command_whitelist_user_ids`에 등록된 Discord 유저는 서버 권한과 무관하게 보호 명령을 사용할 수 있습니다.
+37. [보안] `/jiamusic` URL 입력 제한을 추가했습니다. 검색어는 계속 허용하지만 URL은 `[security] music_allowed_url_hosts`에 등록된 호스트만 `yt-dlp`로 전달합니다.
+38. MCP 서버 설정에 `description`과 `use_when` 메타데이터를 추가할 수 있게 했습니다. 이 설명은 MCP 연결 설정에서는 제외되고, 지아의 시스템 프롬프트에 MCP 서버 사용 가이드로 반영됩니다.
 
 ---
 

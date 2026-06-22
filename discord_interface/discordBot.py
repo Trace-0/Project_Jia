@@ -4,7 +4,8 @@ from discord_interface import voice_receive
 import logging
 import time
 import numpy as np
-from discord_interface.faster_whisper_output import reload_whisper_model
+import audioop
+from discord_interface.faster_whisper_output import reload_whisper_model, ensure_whisper_model_loaded
 import asyncio
 import threading
 from config.config_manager import config
@@ -15,6 +16,7 @@ from LLM.LLM_model_control import unload_ollama_model, load_ollama_model
 from collections import deque
 import uuid
 from discord_interface import pipeline
+from discord_interface.youtube_music import MusicTrack, build_music_queue, resolve_music_track
 
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
@@ -25,61 +27,403 @@ logger.setLevel(logging.INFO)
 
 bot_client = None
 
+PCM_FRAME_BYTES = 3840  # 48kHz, 16-bit, stereo, 20ms
+PCM_SILENCE = b"\x00" * PCM_FRAME_BYTES
+MUSIC_FFMPEG_BEFORE_OPTIONS = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+MUSIC_FFMPEG_OPTIONS = "-vn"
+
+
+class MixedAudioSource(discord.AudioSource):
+    """음악과 TTS/효과음을 하나의 PCM 스트림으로 섞어 보내는 AudioSource"""
+
+    def __init__(self, manager: "AudioStreamManager", guild_id: int):
+        self.manager = manager
+        self.guild_id = guild_id
+
+    def read(self) -> bytes:
+        return self.manager.read_mixed_frame(self.guild_id)
+
+    def is_opus(self) -> bool:
+        return False
+
+
 class AudioStreamManager:
-    """길드별 오디오 스트림을 관리하는 클래스"""
+    """길드별 오디오 스트림을 관리하는 클래스
+
+    하나의 Discord VoiceClient는 한 번에 하나의 AudioSource만 재생할 수 있으므로,
+    이 매니저는 길드별 믹서 AudioSource 하나를 재생하고 그 내부에서 음악과 TTS/효과음을 섞습니다.
+    """
+
     def __init__(self, bot):
-        self.streams: dict[int, dict[str, deque]] = {}
-        self.playing: dict[int, bool] = {}
         self.bot = bot
+        self.streams: dict[int, dict[str, deque]] = {}
+        self.playing: dict[int, bool] = {}  # foreground(TTS/효과음) 재생 여부
+        self._current_foreground: dict[int, discord.AudioSource | None] = {}
+        self._music_sources: dict[int, discord.AudioSource] = {}
+        self._music_titles: dict[int, str] = {}
+        self._music_queues: dict[int, deque[MusicTrack]] = {}
+        self._music_volumes: dict[int, float] = {}
+        self._music_paused: set[int] = set()
+        self._music_loading: set[int] = set()
+        self._music_generation: dict[int, int] = {}
+        self._mixer_active: dict[int, bool] = {}
+        self._lock = threading.RLock()
 
     def add_to_queue(self, guild_id: int, task_id: str, audio_source):
-        if guild_id not in self.streams:
-            self.streams[guild_id] = {}
-            self.playing[guild_id] = False
-        if task_id not in self.streams[guild_id]:
-            self.streams[guild_id][task_id] = deque()
-        
-        self.streams[guild_id][task_id].append(audio_source)
-        logger.info(f"오디오 스트림 큐에 추가: 서버({guild_id})")
-        
-        if not self.playing.get(guild_id):
-            self.bot.loop.create_task(self.play_next(guild_id))
-
-    async def play_next(self, guild_id: int):
-        if self.playing.get(guild_id):
+        try:
+            source = self._make_source(audio_source)
+            volume = max(0.0, min(1.0, float(getattr(audio_source, "_jia_volume", 1.0))))
+        except Exception as e:
+            logger.error(f"오디오 소스 생성 실패: {e}")
             return
 
-        self.playing[guild_id] = True
+        with self._lock:
+            if guild_id not in self.streams:
+                self.streams[guild_id] = {}
+                self.playing[guild_id] = False
+            if task_id not in self.streams[guild_id]:
+                self.streams[guild_id][task_id] = deque()
+            self.streams[guild_id][task_id].append((source, volume))
+        logger.info(f"오디오 스트림 큐에 추가: 서버({guild_id})")
+
+        self._schedule_mixer(guild_id)
+
+    def _make_source(self, audio_source) -> discord.AudioSource:
+        if isinstance(audio_source, discord.AudioSource):
+            return audio_source
+        if isinstance(audio_source, str):
+            return discord.FFmpegPCMAudio(audio_source)
+        return discord.FFmpegPCMAudio(audio_source, pipe=True)
+
+    def _schedule_mixer(self, guild_id: int):
+        if not self.bot.loop or self.bot.loop.is_closed():
+            return
+        self.bot.loop.create_task(self.ensure_mixer(guild_id))
+
+    async def ensure_mixer(self, guild_id: int) -> tuple[bool, str]:
+        with self._lock:
+            if self._mixer_active.get(guild_id):
+                return True, "믹서가 이미 실행 중입니다."
         guild = self.bot.get_guild(guild_id)
         voice_client = guild.voice_client if guild else None
+        if not isinstance(voice_client, discord.VoiceClient) or not voice_client.is_connected():
+            return False, "지아가 음성 채널에 접속해 있지 않습니다."
+        if voice_client.is_playing():
+            return False, "다른 오디오 소스가 이미 재생 중입니다."
 
-        while any(self.streams.get(guild_id, {}).values()):
-            task_id, queue = next((tid, q) for tid, q in self.streams.get(guild_id, {}).items() if q)
-            
-            if not queue:
-                continue
+        source = MixedAudioSource(self, guild_id)
+        with self._lock:
+            self._mixer_active[guild_id] = True
+        voice_client.play(
+            source,
+            after=lambda e: self.bot.loop.call_soon_threadsafe(self._after_mixer, guild_id, e),
+        )
+        return True, "오디오 믹서를 시작했습니다."
 
-            audio_source = queue.popleft()
-            
-            if isinstance(voice_client, discord.VoiceClient) and voice_client.is_connected():
-                if isinstance(audio_source, str):
-                    source = discord.FFmpegPCMAudio(audio_source)
-                else:
-                    source = discord.FFmpegPCMAudio(audio_source, pipe=True)
-                voice_client.play(source, after=lambda e: self.bot.loop.call_soon_threadsafe(self.after_play, guild_id, audio_source, e))
-                return # after_play 콜백이 play_next를 다시 호출
-
-        self.playing[guild_id] = False
-
-    def after_play(self, guild_id: int, audio_source, error):
+    def _after_mixer(self, guild_id: int, error):
         if error:
-            logger.error(f"오디오 파일 재생 후 오류: {error}")
-        if isinstance(audio_source, str) and os.path.exists(audio_source):
-            os.remove(audio_source)
-        elif hasattr(audio_source, 'close'):
-            audio_source.close()
-        self.playing[guild_id] = False
-        self.bot.loop.create_task(self.play_next(guild_id))
+            logger.error(f"오디오 믹서 재생 후 오류: {error}")
+        with self._lock:
+            self._mixer_active[guild_id] = False
+            self.playing[guild_id] = False
+            has_audio = self._has_foreground_locked(guild_id) or self._has_music_locked(guild_id)
+        if has_audio and self.bot.loop and not self.bot.loop.is_closed():
+            self.bot.loop.create_task(self.ensure_mixer(guild_id))
+
+    def _has_foreground_locked(self, guild_id: int) -> bool:
+        return bool(self._current_foreground.get(guild_id)) or any(self.streams.get(guild_id, {}).values())
+
+    def _pop_next_foreground_locked(self, guild_id: int) -> discord.AudioSource | None:
+        guild_streams = self.streams.get(guild_id, {})
+        for task_id in list(guild_streams):
+            queue = guild_streams[task_id]
+            if queue:
+                return queue.popleft()
+            del guild_streams[task_id]
+        return None
+
+    def _foreground_source(self, foreground):
+        return foreground[0] if isinstance(foreground, tuple) else foreground
+
+    def _foreground_volume(self, foreground) -> float:
+        if isinstance(foreground, tuple) and len(foreground) > 1:
+            return max(0.0, min(1.0, foreground[1]))
+        return 1.0
+
+    def _cleanup_source(self, source):
+        try:
+            source.cleanup()
+        except Exception:
+            pass
+
+    def _pad_frame(self, frame: bytes) -> bytes:
+        if len(frame) >= PCM_FRAME_BYTES:
+            return frame[:PCM_FRAME_BYTES]
+        return frame + b"\x00" * (PCM_FRAME_BYTES - len(frame))
+
+    def _scale_frame(self, frame: bytes, volume: float) -> bytes:
+        volume = max(0.0, min(1.0, volume))
+        if volume == 1.0:
+            return frame
+        return audioop.mul(frame, 2, volume)
+
+    def _mix_frames(self, music_frame: bytes, foreground_frame: bytes, music_gain: float, foreground_gain: float = 1.0) -> bytes:
+        mixed = PCM_SILENCE
+        if music_frame:
+            mixed = self._scale_frame(self._pad_frame(music_frame), music_gain)
+        if foreground_frame:
+            foreground = self._scale_frame(self._pad_frame(foreground_frame), foreground_gain)
+            mixed = audioop.add(mixed, foreground, 2)
+        return mixed
+
+    def read_mixed_frame(self, guild_id: int) -> bytes:
+        with self._lock:
+            foreground_frame = b""
+            foreground_gain = 1.0
+            while True:
+                foreground = self._current_foreground.get(guild_id)
+                if foreground is None:
+                    foreground = self._pop_next_foreground_locked(guild_id)
+                    self._current_foreground[guild_id] = foreground
+                if foreground is None:
+                    self.playing[guild_id] = False
+                    break
+                foreground_source = self._foreground_source(foreground)
+                foreground_gain = self._foreground_volume(foreground)
+                foreground_frame = foreground_source.read()
+                if foreground_frame:
+                    self.playing[guild_id] = True
+                    break
+                self._cleanup_source(foreground_source)
+                self._current_foreground[guild_id] = None
+                self.playing[guild_id] = False
+
+            music_frame = b""
+            music = self._music_sources.get(guild_id)
+            if music and guild_id not in self._music_paused:
+                music_frame = music.read()
+                if not music_frame:
+                    self._cleanup_source(music)
+                    self._clear_current_music_locked(guild_id)
+                    self._schedule_next_music(guild_id)
+
+            music_active = self._has_music_locked(guild_id)
+            foreground_active = bool(foreground_frame) or self._has_foreground_locked(guild_id)
+            if not foreground_frame and not music_frame and not music_active:
+                return b""
+
+            normal_volume = self._music_volumes.get(guild_id, config.music_volume)
+            music_gain = config.music_duck_volume if foreground_active else normal_volume
+            return self._mix_frames(music_frame, foreground_frame, music_gain, foreground_gain)
+
+    def stop_foreground(self, guild_id: int) -> int:
+        with self._lock:
+            count = sum(len(q) for q in self.streams.get(guild_id, {}).values())
+            if self._current_foreground.get(guild_id) is not None:
+                count += 1
+                self._cleanup_source(self._foreground_source(self._current_foreground[guild_id]))
+            self.streams.get(guild_id, {}).clear()
+            self._current_foreground[guild_id] = None
+            self.playing[guild_id] = False
+            return count
+
+    def _has_music_locked(self, guild_id: int) -> bool:
+        return (
+            self._music_sources.get(guild_id) is not None
+            or bool(self._music_queues.get(guild_id))
+            or guild_id in self._music_loading
+        )
+
+    def _clear_current_music_locked(self, guild_id: int):
+        self._music_sources.pop(guild_id, None)
+        self._music_titles.pop(guild_id, None)
+
+    def _next_music_generation_locked(self, guild_id: int) -> int:
+        generation = self._music_generation.get(guild_id, 0) + 1
+        self._music_generation[guild_id] = generation
+        return generation
+
+    def _schedule_next_music(self, guild_id: int):
+        if not self.bot.loop or self.bot.loop.is_closed():
+            return
+        with self._lock:
+            if self._music_sources.get(guild_id) is not None:
+                return
+            if guild_id in self._music_loading or guild_id in self._music_paused:
+                return
+            if not self._music_queues.get(guild_id):
+                return
+            self._music_loading.add(guild_id)
+            generation = self._music_generation.get(guild_id, 0)
+        self.bot.loop.create_task(self._start_next_music_track(guild_id, generation))
+
+    async def _start_next_music_track(self, guild_id: int, generation: int):
+        with self._lock:
+            queue = self._music_queues.get(guild_id)
+            if (
+                self._music_generation.get(guild_id, 0) != generation
+                or self._music_sources.get(guild_id) is not None
+                or guild_id in self._music_paused
+                or not queue
+            ):
+                self._music_loading.discard(guild_id)
+                return
+            track = queue.popleft()
+
+        source = None
+        resolved_track = track
+        try:
+            loop = asyncio.get_running_loop()
+            resolved_track = await loop.run_in_executor(None, resolve_music_track, track, config.music_allowed_url_hosts)
+            source = discord.FFmpegPCMAudio(
+                resolved_track.stream_url,
+                before_options=MUSIC_FFMPEG_BEFORE_OPTIONS,
+                options=MUSIC_FFMPEG_OPTIONS,
+            )
+        except Exception as e:
+            logger.error(f"[Discord:Music] 다음 곡을 준비하지 못했어요: {track.title} / {e}")
+
+        should_schedule_next = False
+        with self._lock:
+            self._music_loading.discard(guild_id)
+            if self._music_generation.get(guild_id, 0) != generation:
+                if source:
+                    self._cleanup_source(source)
+                return
+            if source is None:
+                should_schedule_next = bool(self._music_queues.get(guild_id))
+            else:
+                self._music_sources[guild_id] = source
+                self._music_titles[guild_id] = resolved_track.title
+                self._music_volumes.setdefault(guild_id, max(0.0, min(1.0, config.music_volume)))
+
+        if source is None and should_schedule_next:
+            self._schedule_next_music(guild_id)
+        self._schedule_mixer(guild_id)
+
+    def start_music_tracks(self, guild_id: int, tracks: list[MusicTrack]) -> tuple[bool, str]:
+        if not tracks:
+            return False, "재생할 유튜브 음악을 찾지 못했습니다."
+
+        with self._lock:
+            self._next_music_generation_locked(guild_id)
+            old_source = self._music_sources.pop(guild_id, None)
+            if old_source:
+                self._cleanup_source(old_source)
+            self._music_titles.pop(guild_id, None)
+            self._music_queues[guild_id] = deque(tracks)
+            self._music_volumes[guild_id] = max(0.0, min(1.0, config.music_volume))
+            self._music_paused.discard(guild_id)
+            self._music_loading.discard(guild_id)
+
+        self._schedule_next_music(guild_id)
+        first = tracks[0].title
+        if len(tracks) == 1:
+            return True, f"유튜브 음악 재생을 준비할게요: {first}"
+        return True, f"유튜브 재생목록 {len(tracks)}곡을 재생 큐에 넣었어요. 첫 곡: {first}"
+
+    def queue_music_tracks(self, guild_id: int, tracks: list[MusicTrack]) -> tuple[bool, str]:
+        if not tracks:
+            return False, "추가할 유튜브 음악을 찾지 못했습니다."
+
+        with self._lock:
+            if guild_id not in self._music_queues:
+                self._music_queues[guild_id] = deque()
+            self._music_queues[guild_id].extend(tracks)
+            self._music_volumes.setdefault(guild_id, max(0.0, min(1.0, config.music_volume)))
+            should_start = self._music_sources.get(guild_id) is None and guild_id not in self._music_loading
+
+        if should_start:
+            self._schedule_next_music(guild_id)
+        first = tracks[0].title
+        if len(tracks) == 1:
+            return True, f"대기열에 추가했어요: {first}"
+        return True, f"대기열에 {len(tracks)}곡을 추가했어요. 첫 곡: {first}"
+
+    def stop_music(self, guild_id: int) -> tuple[bool, str]:
+        with self._lock:
+            self._next_music_generation_locked(guild_id)
+            source = self._music_sources.pop(guild_id, None)
+            title = self._music_titles.pop(guild_id, None)
+            queued = len(self._music_queues.get(guild_id, ()))
+            loading = guild_id in self._music_loading
+            self._music_queues.pop(guild_id, None)
+            self._music_volumes.pop(guild_id, None)
+            self._music_paused.discard(guild_id)
+            self._music_loading.discard(guild_id)
+        if source is None and not queued and not loading:
+            return False, "재생 중인 음악이 없습니다."
+        if source:
+            self._cleanup_source(source)
+        if queued or loading:
+            return True, f"음악을 멈췄어요. 대기열 {queued}곡도 비웠습니다."
+        return True, f"음악을 멈췄어요: {title}"
+
+    def pause_music(self, guild_id: int) -> tuple[bool, str]:
+        with self._lock:
+            if not self._has_music_locked(guild_id):
+                return False, "재생 중인 음악이 없습니다."
+            self._music_paused.add(guild_id)
+        return True, "음악을 일시정지했어요."
+
+    def resume_music(self, guild_id: int) -> tuple[bool, str]:
+        with self._lock:
+            if not self._has_music_locked(guild_id):
+                return False, "재생 중인 음악이 없습니다."
+            self._music_paused.discard(guild_id)
+            should_start = self._music_sources.get(guild_id) is None
+        if should_start:
+            self._schedule_next_music(guild_id)
+        self._schedule_mixer(guild_id)
+        return True, "음악을 다시 재생할게요."
+
+    def set_music_volume(self, guild_id: int, volume: float) -> tuple[bool, str]:
+        volume = max(0.0, min(1.0, volume))
+        with self._lock:
+            if not self._has_music_locked(guild_id):
+                return False, "재생 중인 음악이 없습니다."
+            self._music_volumes[guild_id] = volume
+        return True, f"음악 볼륨을 {volume:.2f}로 설정했어요."
+
+    def skip_music(self, guild_id: int) -> tuple[bool, str]:
+        with self._lock:
+            if not self._has_music_locked(guild_id):
+                return False, "재생 중인 음악이 없습니다."
+            self._next_music_generation_locked(guild_id)
+            source = self._music_sources.pop(guild_id, None)
+            title = self._music_titles.pop(guild_id, None)
+            self._music_loading.discard(guild_id)
+            has_next = bool(self._music_queues.get(guild_id))
+        if source:
+            self._cleanup_source(source)
+        if has_next:
+            self._schedule_next_music(guild_id)
+            return True, f"현재 곡을 건너뛰었어요: {title or '준비 중인 곡'}"
+        return True, f"현재 곡을 건너뛰었어요. 남은 대기열은 없습니다: {title or '준비 중인 곡'}"
+
+    def music_status(self, guild_id: int) -> str:
+        with self._lock:
+            title = self._music_titles.get(guild_id)
+            queued = len(self._music_queues.get(guild_id, ()))
+            loading = guild_id in self._music_loading
+            if not title and loading:
+                return f"다음 유튜브 음악을 준비 중입니다. (대기열 {queued}곡)"
+            if not title and queued:
+                state = "일시정지" if guild_id in self._music_paused else "대기 중"
+                return f"유튜브 음악 {state}입니다. (대기열 {queued}곡)"
+            if not title:
+                return "재생 중인 음악이 없습니다."
+            state = "일시정지" if guild_id in self._music_paused else "재생 중"
+            volume = self._music_volumes.get(guild_id, config.music_volume)
+        return f"음악 {state}: {title} (대기열 {queued}곡, 볼륨 {volume:.2f}, 말할 때 {config.music_duck_volume:.2f})"
+
+    def has_music(self, guild_id: int) -> bool:
+        with self._lock:
+            return self._has_music_locked(guild_id)
+
+    def stop_all(self, guild_id: int):
+        self.stop_foreground(guild_id)
+        self.stop_music(guild_id)
 
 class JiaBot(commands.Bot):
     def __init__(self, *args, **kwargs):
@@ -125,6 +469,49 @@ def bot():
                 if exclude_guild_id is not None and vc.guild.id == exclude_guild_id:
                     continue
                 return True
+            return False
+
+        def load_voice_runtime_models():
+            """음성 대화에 필요한 모델을 음성 채널 접속 전에 모두 로드합니다."""
+            from discord_interface.espnet_tts_output import ensure_tts_model_loaded
+            load_ollama_model(config.llmModel)
+            ensure_whisper_model_loaded()
+            ensure_tts_model_loaded()
+
+        async def is_command_whitelisted(ctx) -> bool:
+            try:
+                whitelist = {int(user_id) for user_id in config.command_whitelist_user_ids}
+            except (TypeError, ValueError):
+                whitelist = set()
+            if getattr(ctx.author, "id", None) in whitelist:
+                return True
+            try:
+                return await bot.is_owner(ctx.author)
+            except Exception:
+                return False
+
+        def has_server_admin_permission(ctx) -> bool:
+            permissions = getattr(ctx.author, "guild_permissions", None)
+            return bool(
+                getattr(permissions, "administrator", False)
+                or getattr(permissions, "manage_guild", False)
+            )
+
+        async def require_command_access(ctx, level: str, command_name: str) -> bool:
+            if await is_command_whitelisted(ctx):
+                return True
+            if level == "admin" and has_server_admin_permission(ctx):
+                return True
+
+            if level == "owner":
+                message = f"`{command_name}`은 봇 소유자 또는 명령어 화이트리스트 유저만 사용할 수 있어요."
+            else:
+                message = f"`{command_name}`은 서버 관리자 또는 명령어 화이트리스트 유저만 사용할 수 있어요."
+            await ctx.send(message)
+            if bot.def_channel:
+                guild_name = getattr(getattr(ctx, "guild", None), "name", "DM")
+                channel_name = getattr(getattr(ctx, "channel", None), "name", "unknown")
+                await bot.def_channel.send(f"{guild_name}/{channel_name} : 권한 부족 ({command_name}, {ctx.author})")
             return False
 
         def on_config_changed(changed: dict):
@@ -240,16 +627,9 @@ def bot():
                 """지아의 음성 재생을 중단하고, 다음 LLM 호출에서 인터럽트를 인지하도록 표시합니다."""
                 if not self._tts_audio_active():
                     return
-                # 진행 중인 TTS 생성을 취소하고 대기 중인 오디오 큐를 비움
+                # 진행 중인 TTS 생성을 취소하고 foreground(TTS/효과음)만 비움. 배경 음악은 유지합니다.
                 pipeline.cancel_tts_tasks(self.guild.id)
-                manager = bot.audio_stream_manager
-                if manager and self.guild.id in manager.streams:
-                    manager.streams[self.guild.id].clear()
-                voice_client = self.guild.voice_client
-                if isinstance(voice_client, voice_receive.VoiceRecvClient):
-                    voice_client.stop_playback()  # 음성 수신은 유지한 채 재생만 정지
-                elif isinstance(voice_client, discord.VoiceClient) and voice_client.is_playing():
-                    voice_client.stop()
+                pipeline.stop_foreground_audio(self.guild.id)
                 pipeline.mark_playback_interrupted(self.guild.id)
                 logger.info(f"[Discord:Interrupt] [{user.name}]의 발화가 이어져서 재생을 중단했어요.")
 
@@ -288,9 +668,7 @@ def bot():
                 self._current_task.clear()
                 self.buffers.clear()
                 self._interrupt_fired.clear()
-                # 다른 곳에서 LLM을 쓰는 중이면 언로드하지 않음 (오디오 수신 스레드에서 호출되므로 동기 호출 가능)
-                if not llm_still_in_use(exclude_guild_id=self.guild.id):
-                    unload_ollama_model(config.llmModel)
+                logger.info(f"[Discord:Voice] 음성 수신 sink를 정리했어요. (guild={self.guild.id})")
 
         async def get_channel_sure() -> discord.TextChannel | None:
             await bot.wait_until_ready()
@@ -321,8 +699,8 @@ def bot():
                 return
             # RAG 인덱스 동기화
             get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
-            # 모델 로드 동안 이벤트 루프가 멈추지 않도록 백그라운드 스레드에서 실행
-            await asyncio.to_thread(load_ollama_model, config.llmModel)
+            # 음성 대화에 필요한 모델 로드가 모두 끝난 뒤 음성 채널에 접속
+            await asyncio.to_thread(load_voice_runtime_models)
             voice_channel = ctx.author.voice.channel
             # DAVE(E2EE) 호환 음성 수신 클라이언트로 연결
             voice_client = await voice_channel.connect(cls=voice_receive.VoiceRecvClient)
@@ -340,6 +718,7 @@ def bot():
         @bot.command(name="jialeave", description="지아를 음성 채널에서 내보네요")
         async def jialeave(ctx):
             if ctx.voice_client:
+                voice_client = ctx.voice_client
                 # RAG 인덱스 저장
                 get_rag_instance(ctx.guild.id).save_all()
                 # 먼저 말 걸기 유휴 감시 중단
@@ -347,10 +726,12 @@ def bot():
                 # 처리 대기 중인 발화 정리
                 pipeline.clear_pending_utterances(ctx.guild.id)
                 # 오디오 스트림 정리
-                if bot.audio_stream_manager and ctx.guild.id in bot.audio_stream_manager.streams:
-                    del bot.audio_stream_manager.streams[ctx.guild.id]
-                    bot.audio_stream_manager.playing[ctx.guild.id] = False
-                await ctx.voice_client.disconnect()
+                if bot.audio_stream_manager:
+                    bot.audio_stream_manager.stop_all(ctx.guild.id)
+                await voice_client.disconnect()
+                # 명시적으로 음성 연결을 종료했을 때만 LLM을 언로드합니다.
+                if not llm_still_in_use():
+                    await asyncio.to_thread(unload_ollama_model, config.llmModel)
                 if config.leave_reply:
                     await ctx.send("음성 채널에서 나갈게요")
                 if bot.def_channel:
@@ -365,6 +746,9 @@ def bot():
             print('봇 온라인!')
             # 파이프라인에 봇 인스턴스 전달
             pipeline.set_bot(bot)
+            from LLM.langchain_tools.soundboard import load_sound_registry, start_soundboard_registry_watcher
+            await asyncio.to_thread(load_sound_registry)
+            start_soundboard_registry_watcher()
             
             bot.def_channel = await get_channel_sure()
             if bot.def_channel:
@@ -377,12 +761,16 @@ def bot():
 
         @bot.command(name="jiareload", description="지아의 설정을 다시 불러와요")
         async def jiareload(ctx):
+            if not await require_command_access(ctx, "owner", "/jiareload"):
+                return
             try:
                 from config.config_manager import config as global_config
                 from LLM.langchain_llm import reload_llm
+                from LLM.langchain_tools.soundboard import load_sound_registry
                 from discord_interface.espnet_tts_output import reload_tts_model
                 old_llm_model = global_config.llmModel
                 global_config.reload()
+                await asyncio.to_thread(load_sound_registry)
                 reload_whisper_model()  # Whisper 모델 재로딩
                 reload_tts_model()  # TTS 모델 재로딩
                 reload_llm()  # LLM과 시스템 프롬프트 재로딩, 에이전트 캐시 초기화
@@ -403,6 +791,8 @@ def bot():
 
         @bot.command(name="jiasavesetting", description="지아의 설정을 저장해요")
         async def jiasavesetting(ctx):
+            if not await require_command_access(ctx, "owner", "/jiasavesetting"):
+                return
             try:
                 from config.config_manager import config as global_config
                 global_config.save_setting()
@@ -418,6 +808,8 @@ def bot():
 
         @bot.command(name="jiaunloadmodel", description="지아의 LLM 모델을 메모리에서 내려요.")
         async def jiaunloadmodel(ctx):
+            if not await require_command_access(ctx, "owner", "/jiaunloadmodel"):
+                return
             try:
                 model_name = config.llmModel
                 # 백그라운드 스레드에서 모델 언로드 함수 실행
@@ -433,6 +825,8 @@ def bot():
 
         @bot.command(name="jiarestart", description="지아를 재시작해요. 재시작이 필요한 설정 변경(임베딩 모델 등)을 반영할 때 사용해요.")
         async def jiarestart(ctx):
+            if not await require_command_access(ctx, "owner", "/jiarestart"):
+                return
             try:
                 await ctx.send("재시작할게요. 잠시 후에 다시 만나요!")
                 if bot.def_channel:
@@ -495,6 +889,8 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 재생 실패 (지아가 음성 채널에 접속하지 않음)")
                 return
             try:
+                from discord_interface.espnet_tts_output import ensure_tts_model_loaded
+                await asyncio.to_thread(ensure_tts_model_loaded)
                 task_id = str(uuid.uuid4())
                 threading.Thread(target=pipeline.tts_text_and_queue, args=(text, ctx.guild.id, task_id), daemon=True).start()
             except Exception as e:
@@ -506,6 +902,8 @@ def bot():
 
         @bot.command(name="jiahear", description="지아가 음성 채널에서 듣고 텍스트로 변환해줘요")
         async def jiahear(ctx, textID: int = None):
+            if not await require_command_access(ctx, "admin", "/jiahear"):
+                return
             if ctx.author.voice is None:
                 await ctx.send("먼저 음성 채널에 들어가주세요")
                 if bot.def_channel:
@@ -529,6 +927,8 @@ def bot():
                     return
 
             voice_channel = ctx.author.voice.channel
+            # 듣기 전용 모드도 첫 발화에서 로딩이 걸리지 않도록 Whisper를 먼저 로드
+            await asyncio.to_thread(ensure_whisper_model_loaded)
             # DAVE(E2EE) 호환 음성 수신 클라이언트로 연결
             voice_client = await voice_channel.connect(cls=voice_receive.VoiceRecvClient)
             logger.info(f"[Discord:Hear] 음성 채널에 접속할게요 -> {voice_channel.name}")
@@ -542,6 +942,16 @@ def bot():
 
         @bot.command(name="jiaplay", description="지아가 음성 채널에서 오디오 파일을 재생해요")
         async def jiaplay(ctx, file_path: str):
+            if not config.allow_unsafe_jiaplay:
+                await ctx.send(
+                    "`/jiaplay`은 보안 문제로 차단되어 있어요. "
+                    "`settings.toml`의 `[security] allow_unsafe_jiaplay` 설정에서 바꿀 수 있어요."
+                )
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 재생 차단 (/jiaplay 비활성화)")
+                return
+            if not await require_command_access(ctx, "owner", "/jiaplay"):
+                return
             voice_client = ctx.voice_client
             if not isinstance(voice_client, discord.VoiceClient):
                 await ctx.send("먼저 지아를 음성 채널에 초대해주세요")
@@ -554,13 +964,96 @@ def bot():
                     if bot.def_channel:
                         await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 재생 실패 (파일이 존재하지 않음)")
                     return
-                voice_client.play(discord.FFmpegPCMAudio(file_path), after=lambda e: logger.error(f"오디오 재생 중 오류 발생: {e}") if e else None)
+                ok, message = pipeline.play_sound_file(ctx.guild.id, file_path)
+                await ctx.send(message)
+                if not ok and bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 재생 실패 ({message})")
             except Exception as e:
                 await ctx.send(f"오디오 재생 중 오류 발생: {e}")
                 if bot.def_channel:
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 재생 오류 ({e})")
                 logger.error(f"[Discord:Play] 오디오 파일을 재생하는 과정에 오류가 발생했어요. :(\n   -> {e}")
                 return    
+
+        @bot.command(name="jiamusic", description="배경 음악을 재생하거나 제어해요")
+        async def jiamusic(ctx, action: str = "status", *, arg: str = ""):
+            action = (action or "status").lower()
+            voice_client = ctx.voice_client
+            if not isinstance(voice_client, discord.VoiceClient):
+                await ctx.send("먼저 지아를 음성 채널에 초대해주세요")
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음악 제어 실패 (지아가 음성 채널에 접속하지 않음)")
+                return
+
+            try:
+                if action in {"play", "queue", "add"}:
+                    query = arg.strip().strip("\"'")
+                    if not query:
+                        await ctx.send("유튜브 URL, 재생목록 URL, 또는 검색어를 입력해주세요. 예) `/jiamusic play lofi hip hop radio`")
+                        return
+                    await ctx.send("유튜브 음악 정보를 불러오는 중이에요...")
+                    try:
+                        max_items = max(1, int(config.music_max_playlist_items))
+                        tracks = await asyncio.to_thread(build_music_queue, query, max_items, config.music_allowed_url_hosts)
+                    except Exception as e:
+                        await ctx.send(f"유튜브 음악 정보를 불러오지 못했어요: {e}")
+                        if bot.def_channel:
+                            await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 유튜브 음악 정보 로딩 실패 ({e})")
+                        return
+                    if action == "play":
+                        ok, message = pipeline.play_music(ctx.guild.id, tracks)
+                    else:
+                        ok, message = pipeline.queue_music(ctx.guild.id, tracks)
+                    await ctx.send(message)
+                    if not ok and bot.def_channel:
+                        await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음악 재생 실패 ({message})")
+
+                elif action == "stop":
+                    ok, message = pipeline.stop_music(ctx.guild.id)
+                    await ctx.send(message)
+
+                elif action == "pause":
+                    ok, message = pipeline.pause_music(ctx.guild.id)
+                    await ctx.send(message)
+
+                elif action == "resume":
+                    ok, message = pipeline.resume_music(ctx.guild.id)
+                    await ctx.send(message)
+
+                elif action == "skip":
+                    ok, message = pipeline.skip_music(ctx.guild.id)
+                    await ctx.send(message)
+
+                elif action == "volume":
+                    try:
+                        raw_volume = float(arg.strip())
+                    except ValueError:
+                        await ctx.send("볼륨은 0.0부터 1.0 사이 숫자로 입력해주세요. 예) `/jiamusic volume 0.6`")
+                        return
+                    ok, message = pipeline.set_music_volume(ctx.guild.id, raw_volume)
+                    await ctx.send(message)
+
+                elif action == "status":
+                    await ctx.send(pipeline.music_status(ctx.guild.id))
+
+                else:
+                    await ctx.send(
+                        "**/jiamusic 사용법**\n"
+                        "`/jiamusic play <유튜브 URL/재생목록/검색어>` — 기존 대기열을 바꾸고 재생해요\n"
+                        "`/jiamusic queue <유튜브 URL/재생목록/검색어>` — 현재 대기열 뒤에 추가해요\n"
+                        "`/jiamusic stop` — 배경 음악을 멈춰요\n"
+                        "`/jiamusic skip` — 현재 곡을 건너뛰어요\n"
+                        "`/jiamusic pause` — 배경 음악을 일시정지해요\n"
+                        "`/jiamusic resume` — 배경 음악을 다시 재생해요\n"
+                        "`/jiamusic volume <0.0~1.0>` — 음악 볼륨을 조절해요\n"
+                        "`/jiamusic status` — 현재 음악 상태를 확인해요"
+                    )
+            except Exception as e:
+                await ctx.send(f"음악 제어 중 오류 발생: {e}")
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음악 제어 오류 ({e})")
+                logger.error(f"[Discord:Music] 음악을 제어하는 과정에 오류가 발생했어요. :(\n   -> {e}")
+                return
         
         @bot.command(name="jiastop", description="지아가 음성 채널에서 재생 중인 오디오를 멈춰요")
         async def jiastop(ctx):
@@ -575,14 +1068,9 @@ def bot():
                 pipeline.clear_pending_utterances(ctx.guild.id)
                 # 진행 중인 TTS 생성에 취소 신호를 먼저 보내 뒷문장이 새로 큐에 들어오지 않게 함
                 cancelled = pipeline.cancel_tts_tasks(ctx.guild.id)
-                # 대기 중인 오디오 큐를 비워서 다음 항목이 이어 재생되지 않게 함
-                if bot.audio_stream_manager and ctx.guild.id in bot.audio_stream_manager.streams:
-                    bot.audio_stream_manager.streams[ctx.guild.id].clear()
-                if voice_client.is_playing():
-                    if isinstance(voice_client, voice_receive.VoiceRecvClient):
-                        voice_client.stop_playback()  # 음성 수신은 유지한 채 재생만 정지
-                    else:
-                        voice_client.stop()
+                # foreground(TTS/효과음)만 비웁니다. 배경 음악은 /jiamusic stop으로 따로 제어합니다.
+                stopped = pipeline.stop_foreground_audio(ctx.guild.id)
+                if stopped:
                     await ctx.send("재생을 멈췄어요")
                     if bot.def_channel:
                         await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 오디오 재생 정지 요청")
@@ -591,6 +1079,8 @@ def bot():
                     await ctx.send("준비 중이던 음성 생성을 취소했어요")
                     if bot.def_channel:
                         await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 생성 취소 요청")
+                elif bot.audio_stream_manager and bot.audio_stream_manager.has_music(ctx.guild.id):
+                    await ctx.send("지아가 말하는 중은 아니고, 배경 음악만 재생 중이에요. 음악을 멈추려면 `/jiamusic stop`을 사용해주세요.")
                 else:
                     await ctx.send("지금은 재생 중이 아니에요")
                     if bot.def_channel:
@@ -623,6 +1113,9 @@ def bot():
                 rag = get_rag_instance(ctx.guild.id)
                 action = action.lower()
                 arg = arg.strip()
+                if action in {"list", "search", "delete", "profile"}:
+                    if not await require_command_access(ctx, "admin", f"/jiamemory {action}"):
+                        return
 
                 def format_rows(rows) -> str:
                     lines = []
@@ -703,7 +1196,17 @@ def bot():
                     facts = rag.get_profile_facts(ctx.author.name)
                     total = rag.count_memories()
                     state = "기억 안 함 (opt-out)" if opted_out else "기억 중"
-                    await ctx.send(f"**{ctx.author.name}님의 기억 설정**\n- 상태: {state}\n- 프로필에 저장된 사실: {len(facts)}개\n- 이 서버의 전체 기억: {total}개")
+                    if facts:
+                        profile_text = "\n".join(f"- {fact}" for fact in facts)
+                    else:
+                        profile_text = "- 따로 저장된 프로필 사실이 없어요."
+                    await ctx.send(
+                        f"**{ctx.author.name}님의 기억 설정**\n"
+                        f"- 상태: {state}\n"
+                        f"- 프로필에 저장된 사실: {len(facts)}개\n"
+                        f"- 이 서버의 전체 기억: {total}개\n\n"
+                        f"**내 프로필**\n{profile_text}"
+                    )
 
                 else:
                     await ctx.send(
@@ -711,10 +1214,10 @@ def bot():
                         "`/jiamemory list [페이지]` — 이 서버의 기억을 최신순으로 보여줘요\n"
                         "`/jiamemory search <검색어>` — 기억을 검색해요\n"
                         "`/jiamemory delete <ID>` — 해당 ID로 시작하는 기억을 삭제해요\n"
-                        "`/jiamemory profile [이름]` — 사용자에 대해 기억하는 정보를 보여줘요 (생략 시 본인)\n"
+                        "`/jiamemory profile [이름]` — 사용자에 대해 기억하는 정보를 보여줘요 (관리자 전용)\n"
                         "`/jiamemory optout` — 내 대화와 정보를 기억하지 않게 해요 (기존 프로필/단독 기억도 삭제)\n"
                         "`/jiamemory optin` — 기억 기능을 다시 켜요\n"
-                        "`/jiamemory status` — 내 기억 설정 상태를 확인해요"
+                        "`/jiamemory status` — 내 기억 설정 상태와 프로필을 확인해요"
                     )
             except Exception as e:
                 await ctx.send(f"기억 관리 중 오류 발생: {e}")
@@ -724,6 +1227,8 @@ def bot():
 
         @bot.command(name="jiatalk", description="지아와 대화를 시작해요. (대화에 /jia를 붙이지 않아도 괜찮아요.)")
         async def jiatalk(ctx):
+            if not await require_command_access(ctx, "admin", "/jiatalk"):
+                return
             # 길드에 대한 채널 set이 없으면 생성
             if ctx.guild.id not in bot.autotalk_channels:
                 bot.autotalk_channels[ctx.guild.id] = set()
@@ -737,6 +1242,8 @@ def bot():
 
         @bot.command(name="jiastoptalk", description="지아의 대화를 종료해요")
         async def jiastoptalk(ctx):
+            if not await require_command_access(ctx, "admin", "/jiastoptalk"):
+                return
             if ctx.guild.id not in bot.autotalk_channels or ctx.channel.id not in bot.autotalk_channels[ctx.guild.id]:
                 await ctx.send("이 채널에서는 대화 기능이 활성화되어 있지 않아요.")
                 return
