@@ -156,6 +156,17 @@ class Beta120StaticTests(unittest.TestCase):
         self.assertIn('options={"num_ctx": config.llmNumCtx}', model_control)
         self.assertIn("get_summary_chat_model", importance)
 
+    def test_soundboard_volume_runtime_markers_exist(self):
+        soundboard = read_text("LLM/langchain_tools/soundboard.py")
+        pipeline = read_text("discord_interface/pipeline.py")
+        discord_bot = read_text("discord_interface/discordBot.py")
+
+        self.assertIn("volume: float = 1.0", soundboard)
+        self.assertIn("volume=_clamp_volume", soundboard)
+        self.assertIn("volume=entry.volume", soundboard)
+        self.assertIn("_jia_volume", pipeline)
+        self.assertIn("foreground_gain", discord_bot)
+
 
 class Beta120ConfigTests(unittest.TestCase):
     def test_config_defaults_include_beta_settings(self):
@@ -266,7 +277,9 @@ class Beta120SoundboardTests(unittest.TestCase):
 
             sounds = soundboard.load_sound_registry()
             self.assertIn("drop in.mp3", sounds)
-            self.assertIn('"drop in.mp3"', soundboard.REGISTRY_PATH.read_text(encoding="utf-8"))
+            registry_text = soundboard.REGISTRY_PATH.read_text(encoding="utf-8")
+            self.assertIn('"drop in.mp3"', registry_text)
+            self.assertIn("volume = 1.0", registry_text)
 
             version = soundboard.get_sound_registry_version()
             (soundboard_dir / "second.wav").write_bytes(b"")
@@ -299,6 +312,8 @@ class Beta120SoundboardTests(unittest.TestCase):
             self.assertEqual(entry.tags, ("celebrate",))
             self.assertEqual(entry.chance, 1.0)
             self.assertFalse(entry.auto)
+            self.assertEqual(soundboard._entry_from_toml("quiet.mp3", {"volume": 0.4}).volume, 0.4)
+            self.assertEqual(soundboard._entry_from_toml("loud.mp3", {"volume": 2}).volume, 1.0)
             self.assertGreater(soundboard._score_auto_reaction(entry, "생일 축하해 성공했다"), 0)
             self.assertIsNone(soundboard._resolve_sound_path("../secret.mp3"))
             self.assertIsNone(soundboard._resolve_sound_path("not-a-sound.txt"))

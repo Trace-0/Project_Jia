@@ -43,6 +43,7 @@ class SoundEntry:
     auto: bool = True
     cooldown_sec: float | None = None
     chance: float | None = None
+    volume: float = 1.0
 
     def display_description(self) -> str:
         parts = []
@@ -50,6 +51,8 @@ class SoundEntry:
             parts.append(self.description)
         if self.tags:
             parts.append(f"tags={', '.join(self.tags)}")
+        if self.volume != 1.0:
+            parts.append(f"volume={self.volume:.2f}")
         return " / ".join(parts) if parts else "(설명 없음)"
 
 
@@ -98,6 +101,20 @@ def _as_float(value, default: float | None = None) -> float | None:
         return default
 
 
+def _clamp_volume(value) -> float:
+    volume = _as_float(value, 1.0)
+    if volume is None:
+        return 1.0
+    return max(0.0, min(1.0, volume))
+
+
+def _new_registry_entry():
+    entry = tomlkit.inline_table()
+    entry["desc"] = ""
+    entry["volume"] = 1.0
+    return entry
+
+
 def _entry_from_toml(file_name: str, raw_value) -> SoundEntry:
     raw = _unwrap_toml(raw_value)
     if isinstance(raw, dict):
@@ -112,6 +129,7 @@ def _entry_from_toml(file_name: str, raw_value) -> SoundEntry:
             auto=bool(raw.get("auto", True)),
             cooldown_sec=_as_float(raw.get("cooldown", raw.get("cooldown_sec"))),
             chance=chance,
+            volume=_clamp_volume(raw.get("volume", raw.get("vol"))),
         )
     return SoundEntry(file_name=file_name, description=str(raw_value or "").strip())
 
@@ -144,7 +162,7 @@ def _load_sound_registry_locked() -> dict[str, SoundEntry]:
     new_files = [name for name in files if name not in doc]
     if new_files:
         for name in new_files:
-            doc[name] = ""
+            doc[name] = _new_registry_entry()
         try:
             REGISTRY_PATH.write_text(tomlkit.dumps(doc), encoding="utf-8")
             _registry_version += 1
@@ -279,7 +297,7 @@ def maybe_play_auto_reaction(guild_id: int, context: str) -> tuple[bool, str]:
     from discord_interface import pipeline
 
     logging.info(f"[Soundboard] 자동 반응 효과음 재생: {entry.file_name} (guild={guild_id}, score={best_score})")
-    ok, message = pipeline.play_sound_file(guild_id, str(path))
+    ok, message = pipeline.play_sound_file(guild_id, str(path), volume=entry.volume)
     if ok:
         with _auto_reaction_lock:
             _auto_reaction_last_played[key] = time.monotonic()
@@ -316,7 +334,8 @@ def soundboard_tool(guild_id: int) -> Tool:
             return f"'{matched}' 효과음은 재생할 수 없는 파일입니다."
 
         logging.info(f"[Soundboard] 효과음 재생 요청: {matched} (guild={guild_id})")
-        ok, message = pipeline.play_sound_file(guild_id, str(path))
+        entry = sounds[matched]
+        ok, message = pipeline.play_sound_file(guild_id, str(path), volume=entry.volume)
         if ok:
             return f"'{matched}' 효과음을 재생했습니다."
         return f"효과음을 재생하지 못했습니다: {message}"

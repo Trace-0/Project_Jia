@@ -123,13 +123,13 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     "comfyui": {
         "comfyui_url": ("url", "ComfyUI 서버 주소 (예: http://127.0.0.1:8188). 비워두면 이미지 생성 기능을 사용하지 않음 (선택 기능)"),
         "comfyui_checkpoint": ("checkpoint", "사용할 체크포인트 파일 이름 (ComfyUI의 models/checkpoints 안 파일명)"),
-        "comfyui_steps": ("steps", "이미지 생성 스텝 수 (Flux Schnell은 4, 일반 SD 모델은 20~30 권장)"),
-        "comfyui_cfg": ("cfg", "CFG 스케일 (Flux Schnell은 1.0, 일반 SD 모델은 7.0 권장)"),
+        "comfyui_steps": ("steps", "이미지 생성 스텝 수"),
+        "comfyui_cfg": ("cfg", "CFG 스케일"),
         "comfyui_width": ("width", "생성 이미지 가로 크기"),
         "comfyui_height": ("height", "생성 이미지 세로 크기"),
         "comfyui_sampler": ("sampler", "샘플러 이름 (예: euler)"),
-        "comfyui_scheduler": ("scheduler", "스케줄러 이름 (예: normal, Flux는 simple 권장)"),
-        "comfyui_negative_prompt": ("negative_prompt", "네거티브 프롬프트 (Flux 계열은 비워둠)"),
+        "comfyui_scheduler": ("scheduler", "스케줄러 이름"),
+        "comfyui_negative_prompt": ("negative_prompt", "네거티브 프롬프트"),
         "comfyui_timeout_sec": ("timeout_sec", "이미지 생성 대기 제한 시간 (초)"),
     },
     "settings": {

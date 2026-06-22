@@ -338,8 +338,8 @@ auto_react_cooldown_sec = 20
 auto_react_chance = 0.35
 
 # soundboard/sounds.toml
-"tada.mp3" = { desc = "축하하거나 성공했을 때 쓰는 팡파레", tags = ["success", "celebrate"], cooldown = 20, chance = 0.8 }
-"fail.wav" = { desc = "실패하거나 아쉬운 상황의 효과음", tags = ["fail", "awkward"], cooldown = 30, chance = 0.5 }
+"tada.mp3" = { desc = "축하하거나 성공했을 때 쓰는 팡파레", tags = ["success", "celebrate"], cooldown = 20, chance = 0.8, volume = 0.8 }
+"fail.wav" = { desc = "실패하거나 아쉬운 상황의 효과음", tags = ["fail", "awkward"], cooldown = 30, chance = 0.5, volume = 0.6 }
 "laugh.wav" = { desc = "웃긴 드립이나 농담에 쓰는 웃음 효과음", tags = ["laugh"], auto = true }
 "secret.wav" = { desc = "수동으로만 쓰고 싶은 효과음", auto = false }
 ```
@@ -347,6 +347,7 @@ auto_react_chance = 0.35
 - `tags`: 자동 반응에 사용할 상황 태그예요. `success`, `celebrate`, `fail`, `awkward`, `laugh`, `surprise`, `sad`, `angry` 같은 태그를 인식해요.
 - `cooldown`: 해당 효과음이 자동으로 다시 재생되기까지의 최소 간격이에요. 생략하면 `[soundboard] auto_react_cooldown_sec`를 따라가요.
 - `chance`: 후보로 잡혔을 때 실제로 재생할 확률이에요. 생략하면 `[soundboard] auto_react_chance`를 따라가요.
+- `volume`: 효과음 자체 볼륨이에요. `0.0`부터 `1.0` 사이 숫자로 지정하고, 생략하면 `1.0`을 사용해요.
 - `auto = false`: 자동 반응에서는 제외하고, 지아가 직접 `play_soundboard` 도구를 쓸 때만 재생할 수 있게 해요.
 
 > [!note]
@@ -477,7 +478,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 26. LLM을 로컬 Ollama 대신 외부 API(OpenAI, Anthropic, Google 등)로도 사용할 수 있게 했습니다. `settings.toml`의 `[llm] provider`/`api_key`/`api_base`로 설정하며, 기본값은 로컬 `ollama`라 기존 사용자에게는 영향이 없습니다. 자세한 방법은 [외부 LLM API 사용](#외부-llm-api-사용) 항목을 참고하세요. (단, 외부 API 사용 시 대화 내용이 외부로 전송됩니다)
 27. `provider`를 `ollama`로 둔 채 `[llm] api_base`에 주소를 적으면, 다른 컴퓨터나 다른 포트에서 돌아가는 원격 Ollama 서버에도 연결할 수 있습니다. 모델 로드/언로드도 해당 서버를 향합니다.
 28. Ollama Cloud(https://ollama.com)를 지원합니다. `provider`를 `ollama`로 둔 채 `[llm] api_key`에 Ollama API 키만 넣으면 자동으로 클라우드(`https://ollama.com`)에 Bearer 인증으로 연결되어, 강력한 로컬 GPU 없이도 큰 모델을 쓸 수 있습니다. (이 경우 모델 로드/언로드는 클라우드가 관리하므로 건너뜁니다)
-29. 사운드보드 자동 반응 기능을 추가했습니다. `[soundboard] auto_react`를 켜면 대화 문맥과 `sounds.toml`의 태그를 바탕으로 효과음을 짧게 자동 재생하며, 효과음별 `cooldown`, `chance`, `auto` 설정으로 과한 재생을 막을 수 있습니다.
+29. 사운드보드 자동 반응 기능을 추가했습니다. `[soundboard] auto_react`를 켜면 대화 문맥과 `sounds.toml`의 태그를 바탕으로 효과음을 짧게 자동 재생하며, 효과음별 `cooldown`, `chance`, `auto`, `volume` 설정으로 과한 재생과 볼륨을 조절할 수 있습니다.
 30. ComfyUI 이미지 생성에서 상황별 모델 프로필을 지원합니다. `[comfyui.models.<ID>]`에 체크포인트와 `use_when`/`tags`를 등록하면 지아가 이미지 종류에 맞는 `model_id`를 선택해 생성합니다.
 31. [음성] 배경 음악 재생 명령어 `/jiamusic`를 추가했습니다. stop/pause/resume/volume/status 제어를 지원합니다.
 32. [음성] 오디오 믹서를 추가해 배경 음악과 TTS/효과음을 함께 출력합니다. 지아가 말하거나 효과음을 재생하는 동안 음악 볼륨을 `[music] duck_volume`으로 낮추고, 끝나면 기존 음악 볼륨으로 복구합니다.

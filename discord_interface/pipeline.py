@@ -42,7 +42,7 @@ def tts_and_play(text: str, guild: int, task_id: str):
         except Exception as e:
             logging.error(f"[Pipeline] TTS 생성 및 재생 작업 큐에 추가 중 오류 발생: {e}")
 
-def play_sound_file(guild: int, file_path: str) -> tuple[bool, str]:
+def play_sound_file(guild: int, file_path: str, volume: float = 1.0) -> tuple[bool, str]:
     """사운드보드 효과음 파일을 봇 오디오 재생 큐에 추가합니다. (성공 여부, 메시지)를 반환합니다.
 
     파일 경로 검증은 호출하는 쪽(LLM/langchain_tools/soundboard.py)에서 수행합니다.
@@ -58,9 +58,12 @@ def play_sound_file(guild: int, file_path: str) -> tuple[bool, str]:
     try:
         with open(file_path, "rb") as f:
             audio_buffer = io.BytesIO(f.read())
+            audio_buffer._jia_volume = max(0.0, min(1.0, float(volume)))
     except OSError as e:
         logging.error(f"[Pipeline] 효과음 파일을 읽지 못했어요: {e}")
         return False, f"효과음 파일을 읽을 수 없습니다: {e}"
+    except (TypeError, ValueError):
+        return False, "효과음 볼륨은 0.0부터 1.0 사이 숫자로 설정해야 합니다."
     if not bot_instance.loop or bot_instance.loop.is_closed():
         return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
     try:

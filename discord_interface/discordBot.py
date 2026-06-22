@@ -72,6 +72,7 @@ class AudioStreamManager:
     def add_to_queue(self, guild_id: int, task_id: str, audio_source):
         try:
             source = self._make_source(audio_source)
+            volume = max(0.0, min(1.0, float(getattr(audio_source, "_jia_volume", 1.0))))
         except Exception as e:
             logger.error(f"오디오 소스 생성 실패: {e}")
             return
@@ -82,7 +83,7 @@ class AudioStreamManager:
                 self.playing[guild_id] = False
             if task_id not in self.streams[guild_id]:
                 self.streams[guild_id][task_id] = deque()
-            self.streams[guild_id][task_id].append(source)
+            self.streams[guild_id][task_id].append((source, volume))
         logger.info(f"오디오 스트림 큐에 추가: 서버({guild_id})")
 
         self._schedule_mixer(guild_id)
@@ -141,6 +142,14 @@ class AudioStreamManager:
             del guild_streams[task_id]
         return None
 
+    def _foreground_source(self, foreground):
+        return foreground[0] if isinstance(foreground, tuple) else foreground
+
+    def _foreground_volume(self, foreground) -> float:
+        if isinstance(foreground, tuple) and len(foreground) > 1:
+            return max(0.0, min(1.0, foreground[1]))
+        return 1.0
+
     def _cleanup_source(self, source):
         try:
             source.cleanup()
@@ -158,18 +167,19 @@ class AudioStreamManager:
             return frame
         return audioop.mul(frame, 2, volume)
 
-    def _mix_frames(self, music_frame: bytes, foreground_frame: bytes, music_gain: float) -> bytes:
+    def _mix_frames(self, music_frame: bytes, foreground_frame: bytes, music_gain: float, foreground_gain: float = 1.0) -> bytes:
         mixed = PCM_SILENCE
         if music_frame:
             mixed = self._scale_frame(self._pad_frame(music_frame), music_gain)
         if foreground_frame:
-            foreground = self._scale_frame(self._pad_frame(foreground_frame), 1.0)
+            foreground = self._scale_frame(self._pad_frame(foreground_frame), foreground_gain)
             mixed = audioop.add(mixed, foreground, 2)
         return mixed
 
     def read_mixed_frame(self, guild_id: int) -> bytes:
         with self._lock:
             foreground_frame = b""
+            foreground_gain = 1.0
             while True:
                 foreground = self._current_foreground.get(guild_id)
                 if foreground is None:
@@ -178,11 +188,13 @@ class AudioStreamManager:
                 if foreground is None:
                     self.playing[guild_id] = False
                     break
-                foreground_frame = foreground.read()
+                foreground_source = self._foreground_source(foreground)
+                foreground_gain = self._foreground_volume(foreground)
+                foreground_frame = foreground_source.read()
                 if foreground_frame:
                     self.playing[guild_id] = True
                     break
-                self._cleanup_source(foreground)
+                self._cleanup_source(foreground_source)
                 self._current_foreground[guild_id] = None
                 self.playing[guild_id] = False
 
@@ -202,14 +214,14 @@ class AudioStreamManager:
 
             normal_volume = self._music_volumes.get(guild_id, config.music_volume)
             music_gain = config.music_duck_volume if foreground_active else normal_volume
-            return self._mix_frames(music_frame, foreground_frame, music_gain)
+            return self._mix_frames(music_frame, foreground_frame, music_gain, foreground_gain)
 
     def stop_foreground(self, guild_id: int) -> int:
         with self._lock:
             count = sum(len(q) for q in self.streams.get(guild_id, {}).values())
             if self._current_foreground.get(guild_id) is not None:
                 count += 1
-                self._cleanup_source(self._current_foreground[guild_id])
+                self._cleanup_source(self._foreground_source(self._current_foreground[guild_id]))
             self.streams.get(guild_id, {}).clear()
             self._current_foreground[guild_id] = None
             self.playing[guild_id] = False
