@@ -5,7 +5,7 @@ import logging
 import time
 import numpy as np
 import audioop
-from discord_interface.faster_whisper_output import reload_whisper_model
+from discord_interface.faster_whisper_output import reload_whisper_model, ensure_whisper_model_loaded
 import asyncio
 import threading
 from config.config_manager import config
@@ -459,6 +459,13 @@ def bot():
                 return True
             return False
 
+        def load_voice_runtime_models():
+            """음성 대화에 필요한 모델을 음성 채널 접속 전에 모두 로드합니다."""
+            from discord_interface.espnet_tts_output import ensure_tts_model_loaded
+            load_ollama_model(config.llmModel)
+            ensure_whisper_model_loaded()
+            ensure_tts_model_loaded()
+
         async def is_command_whitelisted(ctx) -> bool:
             try:
                 whitelist = {int(user_id) for user_id in config.command_whitelist_user_ids}
@@ -649,9 +656,7 @@ def bot():
                 self._current_task.clear()
                 self.buffers.clear()
                 self._interrupt_fired.clear()
-                # 다른 곳에서 LLM을 쓰는 중이면 언로드하지 않음 (오디오 수신 스레드에서 호출되므로 동기 호출 가능)
-                if not llm_still_in_use(exclude_guild_id=self.guild.id):
-                    unload_ollama_model(config.llmModel)
+                logger.info(f"[Discord:Voice] 음성 수신 sink를 정리했어요. (guild={self.guild.id})")
 
         async def get_channel_sure() -> discord.TextChannel | None:
             await bot.wait_until_ready()
@@ -682,8 +687,8 @@ def bot():
                 return
             # RAG 인덱스 동기화
             get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
-            # 모델 로드 동안 이벤트 루프가 멈추지 않도록 백그라운드 스레드에서 실행
-            await asyncio.to_thread(load_ollama_model, config.llmModel)
+            # 음성 대화에 필요한 모델 로드가 모두 끝난 뒤 음성 채널에 접속
+            await asyncio.to_thread(load_voice_runtime_models)
             voice_channel = ctx.author.voice.channel
             # DAVE(E2EE) 호환 음성 수신 클라이언트로 연결
             voice_client = await voice_channel.connect(cls=voice_receive.VoiceRecvClient)
@@ -701,6 +706,7 @@ def bot():
         @bot.command(name="jialeave", description="지아를 음성 채널에서 내보네요")
         async def jialeave(ctx):
             if ctx.voice_client:
+                voice_client = ctx.voice_client
                 # RAG 인덱스 저장
                 get_rag_instance(ctx.guild.id).save_all()
                 # 먼저 말 걸기 유휴 감시 중단
@@ -710,7 +716,10 @@ def bot():
                 # 오디오 스트림 정리
                 if bot.audio_stream_manager:
                     bot.audio_stream_manager.stop_all(ctx.guild.id)
-                await ctx.voice_client.disconnect()
+                await voice_client.disconnect()
+                # 명시적으로 음성 연결을 종료했을 때만 LLM을 언로드합니다.
+                if not llm_still_in_use():
+                    await asyncio.to_thread(unload_ollama_model, config.llmModel)
                 if config.leave_reply:
                     await ctx.send("음성 채널에서 나갈게요")
                 if bot.def_channel:
@@ -863,6 +872,8 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 재생 실패 (지아가 음성 채널에 접속하지 않음)")
                 return
             try:
+                from discord_interface.espnet_tts_output import ensure_tts_model_loaded
+                await asyncio.to_thread(ensure_tts_model_loaded)
                 task_id = str(uuid.uuid4())
                 threading.Thread(target=pipeline.tts_text_and_queue, args=(text, ctx.guild.id, task_id), daemon=True).start()
             except Exception as e:
@@ -899,6 +910,8 @@ def bot():
                     return
 
             voice_channel = ctx.author.voice.channel
+            # 듣기 전용 모드도 첫 발화에서 로딩이 걸리지 않도록 Whisper를 먼저 로드
+            await asyncio.to_thread(ensure_whisper_model_loaded)
             # DAVE(E2EE) 호환 음성 수신 클라이언트로 연결
             voice_client = await voice_channel.connect(cls=voice_receive.VoiceRecvClient)
             logger.info(f"[Discord:Hear] 음성 채널에 접속할게요 -> {voice_channel.name}")

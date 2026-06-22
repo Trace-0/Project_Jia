@@ -286,5 +286,19 @@ class VoiceRecvClient(discord.VoiceClient):
         return self._receiver is not None
 
     def stop(self):
+        """재생 중인 오디오만 멈춥니다.
+
+        discord.py의 VoiceClient.stop()은 재생 중단 의미로 쓰이므로,
+        여기서 음성 수신까지 끊으면 응답 재생 종료/중단 시 수신 sink가
+        정리될 수 있습니다. 음성 수신은 stop_listening(), disconnect(),
+        cleanup()에서만 정리합니다.
+        """
         super().stop()
+
+    async def disconnect(self, *args, **kwargs):
         self.stop_listening()
+        await super().disconnect(*args, **kwargs)
+
+    def cleanup(self):
+        self.stop_listening()
+        super().cleanup()
