@@ -527,6 +527,10 @@ def bot():
             load_ollama_model(config.llmModel)
             ensure_whisper_model_loaded()
             ensure_tts_model_loaded()
+            if config.voice_smart_turn:
+                # 실패해도 음성 대화는 고정 대기 시간으로 동작하므로 결과는 무시
+                from discord_interface.smart_turn import ensure_smart_turn_loaded
+                ensure_smart_turn_loaded(retry=True)
 
         async def is_command_whitelisted(ctx) -> bool:
             try:
@@ -631,6 +635,8 @@ def bot():
                 # 마지막 패킷 시각만 기록하고, 감시 태스크가 없을 때만 새로 만듦
                 # (무음 시에는 패킷 자체가 오지 않으므로 시각 경과만으로 발화 종료를 감지 가능)
                 self.last_packet_time[user.id] = time.monotonic()
+                # 대화 워커가 "아직 누가 말하는 중인지" 알 수 있도록 길드 단위로도 기록 (응답 시작 대기용)
+                pipeline.note_voice_packet(self.guild.id)
                 task = self._current_task.get(user.id)
                 if task is None or task.done():
                     def runner():

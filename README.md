@@ -154,6 +154,9 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[bot]` `leave_reply` | `true` | 음성 채널 퇴장 시 안내 메시지 전송 여부 | 즉시 |
 | `[voice]` `timeout_sec` | `0.1` | 마지막 음성 패킷 이후 이 시간 동안 패킷이 없으면 발화가 끝났다고 판단해요 | 즉시 |
 | `[voice]` `interrupt_speech_sec` | `0.5` | 지아가 말하는 중 사용자의 발화가 이 시간 이상 이어지면 재생을 중단해요(barge-in) | 즉시 |
+| `[voice]` `turn_grace_sec` | `0.7` | 말이 끝난 뒤 이 시간(초) 동안 아무도 이어서 말하지 않으면 지아가 대답을 시작해요. 숨 쉬느라 끊긴 문장을 한 번에 알아듣게 해줘요 (0이면 바로 대답) | 즉시 |
+| `[voice]` `smart_turn` | `true` | 문장 끝 판정 모델([Smart Turn v3](https://github.com/pipecat-ai/smart-turn), 한국어·영어·일본어 등 23개 언어)로 말이 끝났는지 판단해요. 끝났으면 0.2초만 기다렸다가 대답하고, 안 끝났으면 더 기다려요. 첫 음성 채널 접속 때 모델(약 8MB)을 내려받고, 모델을 쓸 수 없으면 `turn_grace_sec`로 처리해요 | 즉시 |
+| `[voice]` `smart_turn_incomplete_wait_sec` | `2.0` | 모델이 말이 안 끝났다고 판단했을 때 이어지는 말을 기다리는 최대 무음 시간(초). 판정이 틀려도 이만큼만 늦어지고, 누가 계속 말해도 8초가 지나면 대답해요 | 즉시 |
 | `[voice]` `proactive_idle_sec` | `0` | 음성 채널에서 이 시간(초) 동안 아무도 말이 없으면 지아가 먼저 말을 걸어봐요 (0이면 사용 안 함) | 즉시 |
 | `[soundboard]` `auto_react` | `false` | 대화 상황에 맞는 효과음을 자동으로 재생할지 여부 | 즉시 |
 | `[soundboard]` `auto_react_cooldown_sec` | `20` | 같은 효과음이 자동으로 다시 재생되기까지의 최소 간격 | 즉시 |
@@ -173,6 +176,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[whisper]` `device` | `cuda` | Whisper 실행 디바이스 | 모델 자동 재로딩 |
 | `[whisper]` `compute_type` | `float16` | Whisper 연산 정밀도 | 모델 자동 재로딩 |
 | `[whisper]` `beam_size` | `5` | STT beam size (클수록 정확하지만 느려요) | 즉시 |
+| `[whisper]` `languages` | `["ko", "en", "ja"]` | 음성 인식 후보 언어 목록. 발화마다 이 안에서만 언어를 골라 받아 적어요. 짧은 말이 엉뚱한 언어로 인식되는 걸 막아줘요 (비우면 모든 언어에서 자동 감지) | 즉시 |
 | `[tts]` `model` | (없음) | TTS(음성 합성) 모델 경로 | 모델 자동 재로딩 |
 | `[llm]` `model` | `gemma4:latest` | LLM 모델 이름. `provider`가 `ollama`면 Ollama 모델, 외부 API면 그 API의 모델 이름 | 모델 자동 재로딩 |
 | `[llm]` `provider` | `ollama` | LLM 제공자. `ollama`(기본, 로컬) 또는 `openai`/`anthropic`/`google_genai`/`groq` 등. 아래 '외부 LLM API 사용' 항목 참고 | 모델 자동 재로딩 |
@@ -493,6 +497,9 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 37. [보안] `/jiamusic` URL 입력 제한을 추가했습니다. 검색어는 계속 허용하지만 URL은 `[security] music_allowed_url_hosts`에 등록된 호스트만 `yt-dlp`로 전달합니다.
 38. MCP 서버 설정에 `description`과 `use_when` 메타데이터를 추가할 수 있게 했습니다. 이 설명은 MCP 연결 설정에서는 제외되고, 지아의 시스템 프롬프트에 MCP 서버 사용 가이드로 반영됩니다.
 39. 모든 커맨드를 디스코드 슬래시(/) 명령으로 등록합니다. `/`만 입력해도 명령어 목록과 설명이 표시되고, `/jiamusic`·`/jiamemory`의 동작은 선택지로 고를 수 있습니다. 기존 메시지 방식 입력도 계속 지원합니다.
+40. [음성] 숨 쉬느라 끊긴 발화를 한 번에 처리합니다. 말이 끝난 뒤 `[voice] turn_grace_sec` 동안 이어지는 말이 없을 때 대답을 시작하고, 같은 사람의 쪼개진 발화는 하나로 합칩니다. 쪼개진 발화의 인식 순서가 뒤바뀌던 문제도 고쳤습니다.
+41. [음성] 음성 인식이 `[whisper] languages`(기본 한국어·영어·일본어) 안에서만 언어를 고르도록 하고, Whisper가 무음에서 지어내는 "시청해주셔서 감사합니다" 같은 문장을 걸러냅니다.
+42. [음성] 문장 끝 판정 모델(Smart Turn v3)을 추가했습니다. 말이 끝났다고 판단하면 더 빨리 대답하고, 말하다 잠깐 멈춘 것으로 판단하면 `[voice] smart_turn_incomplete_wait_sec`까지 기다립니다. 모델을 쓸 수 없거나 판정이 틀려도 대화가 멈추지 않도록 고정 대기 시간과 최대 대기 시간(8초)으로 처리합니다.
 
 ---
 

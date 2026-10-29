@@ -181,11 +181,82 @@ class Beta120StaticTests(unittest.TestCase):
         self.assertIn("foreground_gain", discord_bot)
 
 
+class Beta120VoiceInputTests(unittest.TestCase):
+    def test_voice_turn_grace_markers_exist(self):
+        pipeline = read_text("discord_interface/pipeline.py")
+        discord_bot = read_text("discord_interface/discordBot.py")
+        for marker in [
+            "async def _wait_for_turn_end",
+            "_merge_consecutive_utterances(utterances)",
+            "_inflight_transcriptions",
+            "_transcribe_locks",
+            "config.voice_turn_grace_sec",
+        ]:
+            self.assertIn(marker, pipeline)
+        self.assertIn("pipeline.note_voice_packet(self.guild.id)", discord_bot)
+        for marker in [
+            "def _required_quiet_sec",
+            "SMART_TURN_COMPLETE_WAIT_SEC",
+            "config.voice_smart_turn_incomplete_wait_sec",
+            "predict_turn_complete, turn_audio",
+            "while time.monotonic() < deadline",
+        ]:
+            self.assertIn(marker, pipeline)
+        self.assertIn("ensure_smart_turn_loaded(retry=True)", discord_bot)
+        smart_turn = read_text("discord_interface/smart_turn.py")
+        self.assertIn("smart-turn-v3.2-cpu.onnx", smart_turn)
+        self.assertIn("return None", smart_turn)
+        # 발화 종료 감지(패킷 0.1초 끊김) 디바운스는 그대로 유지
+        self.assertIn("self.last_packet_time[user.id] = time.monotonic()", discord_bot)
+
+    def test_whisper_language_candidates_and_hallucination_filter(self):
+        class FakeWhisper:
+            def __init__(self, probs, multilingual=True):
+                self.model = SimpleNamespace(is_multilingual=multilingual)
+                self._probs = probs
+
+            def detect_language(self, audio):
+                return "ru", 0.9, self._probs
+
+        fake_config = SimpleNamespace(
+            whisper_languages=["ko", "en", "ja"],
+            whisper_model="turbo",
+            whisper_device="cpu",
+            whisper_compute_type="int8",
+            whisper_beam_size=5,
+        )
+        patches = {
+            "faster_whisper": make_module("faster_whisper", WhisperModel=object),
+            "config.config_manager": make_module("config.config_manager", config=fake_config),
+        }
+        with patched_modules(patches):
+            whisper = import_fresh("discord_interface.faster_whisper_output")
+
+            whisper.model = FakeWhisper([("ru", 0.5), ("en", 0.3), ("ko", 0.15), ("ja", 0.05)])
+            self.assertEqual(whisper._pick_language(None), "en")
+            whisper.model = FakeWhisper([("ko", 0.2), ("ja", 0.6), ("en", 0.2)])
+            self.assertEqual(whisper._pick_language(None), "ja")
+
+            fake_config.whisper_languages = []
+            self.assertIsNone(whisper._pick_language(None))
+            fake_config.whisper_languages = ["ko"]
+            self.assertEqual(whisper._pick_language(None), "ko")
+
+            for text in [" 시청해주셔서 감사합니다.", "Thanks for watching!", "MBC 뉴스 이덕영입니다.", "ご視聴ありがとうございました", " ..."]:
+                self.assertTrue(whisper._is_hallucination(text), text)
+            for text in [" 감사합니다.", " Thank you.", " 오늘 영상 봤어?", " 지아야 안녕"]:
+                self.assertFalse(whisper._is_hallucination(text), text)
+
+
 class Beta120ConfigTests(unittest.TestCase):
     def test_config_defaults_include_beta_settings(self):
         config_module = import_fresh("config.config")
         cfg = config_module.Config()
         self.assertEqual(cfg.music_allowed_url_hosts, ["youtube.com", "youtu.be"])
+        self.assertEqual(cfg.whisper_languages, ["ko", "en", "ja"])
+        self.assertEqual(cfg.voice_turn_grace_sec, 0.7)
+        self.assertTrue(cfg.voice_smart_turn)
+        self.assertEqual(cfg.voice_smart_turn_incomplete_wait_sec, 2.0)
         self.assertIn("command_whitelist_user_ids", config_module.FIELD_TO_TOML)
         self.assertIn("llm_tools", config_module.FIELD_TO_TOML)
         default_mcp = config_module.DEFAULT_MCP_SERVERS()["ddg-search"]

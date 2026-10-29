@@ -47,6 +47,9 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     "voice": {
         "voice_timeout_sec": ("timeout_sec", "마지막 음성 패킷 이후 이 시간 동안 패킷이 없으면 발화 종료로 판단 (초)"),
         "voice_interrupt_speech_sec": ("interrupt_speech_sec", "재생 중단(barge-in) 판정에 필요한 연속 발화 시간 (초)"),
+        "voice_turn_grace_sec": ("turn_grace_sec", "발화가 끝난 뒤 이 시간(초) 동안 아무도 이어서 말하지 않으면 응답을 시작 (쪼개진 발화를 한 번에 처리, 0이면 바로 응답)"),
+        "voice_smart_turn": ("smart_turn", "문장 끝 판정 모델(Smart Turn v3)로 말이 끝났는지 판단해 대기 시간을 조절 (모델을 못 쓰면 turn_grace_sec로 처리)"),
+        "voice_smart_turn_incomplete_wait_sec": ("smart_turn_incomplete_wait_sec", "모델이 말이 안 끝났다고 판단했을 때 이어지는 말을 기다리는 최대 무음 시간 (초)"),
         "proactive_idle_sec": ("proactive_idle_sec", "음성 채널에서 이 시간(초) 동안 아무도 말이 없으면 지아가 먼저 말을 걸어봄 (0이면 사용 안 함)"),
     },
     "soundboard": {
@@ -94,6 +97,7 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
         "whisper_device": ("device", "Whisper 실행 디바이스 (변경 시 자동 재로딩)"),
         "whisper_compute_type": ("compute_type", "Whisper 연산 정밀도 (변경 시 자동 재로딩)"),
         "whisper_beam_size": ("beam_size", "STT beam size (클수록 정확하지만 느려짐)"),
+        "whisper_languages": ("languages", "음성 인식 후보 언어 목록. 발화마다 이 안에서만 언어를 감지 (비우면 모든 언어에서 자동 감지)"),
     },
     "tts": {
         "tts_model": ("model", "TTS(음성 합성) 모델 경로 (변경 시 자동 재로딩)"),
@@ -163,7 +167,7 @@ def _parse_env_value(raw: str, f) -> object:
     """환경 변수(.env) 문자열 값을 필드 타입에 맞게 변환합니다. (.env 마이그레이션/환경 변수 오버라이드용)"""
     if f.name == "command_whitelist_user_ids":
         return [int(v) for v in _parse_string_list(raw)]
-    if f.name == "music_allowed_url_hosts":
+    if f.name in ("music_allowed_url_hosts", "whisper_languages"):
         return _parse_string_list(raw)
     if f.type is bool:
         return raw.strip().lower() in ("1", "true", "yes", "on")
@@ -189,7 +193,7 @@ def _coerce_toml_value(value, f) -> object:
         if isinstance(plain, str) and plain.strip():
             return [int(v.strip()) for v in plain.split(",") if v.strip()]
         return []
-    if f.name == "music_allowed_url_hosts":
+    if f.name in ("music_allowed_url_hosts", "whisper_languages"):
         plain = value.unwrap() if hasattr(value, "unwrap") else value
         if isinstance(plain, (list, tuple)):
             return [str(v).strip() for v in plain if str(v).strip()]
@@ -241,6 +245,9 @@ class Config:
     # === 음성 수신/발화 감지 (저장 즉시 반영) ===
     voice_timeout_sec: float = 0.1
     voice_interrupt_speech_sec: float = 0.5
+    voice_turn_grace_sec: float = 0.7
+    voice_smart_turn: bool = True
+    voice_smart_turn_incomplete_wait_sec: float = 2.0
     proactive_idle_sec: int = 0  # 0이면 먼저 말 걸기 비활성화
 
     # === 사운드보드 자동 반응 (저장 즉시 반영) ===
@@ -269,6 +276,7 @@ class Config:
     whisper_device: str = "cuda"
     whisper_compute_type: str = "float16"
     whisper_beam_size: int = 5
+    whisper_languages: list[str] = field(default_factory=lambda: ["ko", "en", "ja"])
 
     # === RAG/기억 ===
     embedding_model: str = "dragonkue/BGE-m3-ko"  # 변경 시 재시작(/jiarestart) 필요
