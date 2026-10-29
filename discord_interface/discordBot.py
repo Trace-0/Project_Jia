@@ -1,5 +1,7 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
+from typing import Literal, Optional
 from discord_interface import voice_receive
 import logging
 import time
@@ -432,6 +434,28 @@ class AudioStreamManager:
         self.stop_foreground(guild_id)
         self.stop_music(guild_id)
 
+class JiaContext(commands.Context):
+    """응답을 보냈는지 기록하는 Context
+
+    슬래시(/) 명령은 아무 응답도 보내지 않으면 디스코드에 '애플리케이션이 응답하지 않았어요'로 표시되므로,
+    명령이 끝난 뒤 응답 여부를 확인하는 데 씁니다.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.replied = False
+        self.reply_pending = False  # 응답을 나중에 다른 스레드에서 보내는 명령 (/jia 등)
+
+    async def send(self, *args, **kwargs):
+        self.replied = True
+        return await super().send(*args, **kwargs)
+
+
+def _quote_prompt(prompt: str, limit: int = 150) -> str:
+    prompt = prompt if len(prompt) <= limit else prompt[:limit] + "…"
+    return "> " + prompt.replace("\n", "\n> ")
+
+
 class JiaBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -440,16 +464,35 @@ class JiaBot(commands.Bot):
         self.def_channel: discord.TextChannel | None = None # 기본 로그 채널
         self.audio_stream_manager: AudioStreamManager | None = None
 
+    async def get_context(self, origin, /, *, cls=JiaContext):
+        return await super().get_context(origin, cls=cls)
+
     async def setup_hook(self):
         self.audio_stream_manager = AudioStreamManager(self)
+        # 슬래시(/) 명령 목록을 디스코드에 등록 (클라이언트에 보이기까지 몇 분 걸릴 수 있음)
+        try:
+            synced = await self.tree.sync()
+            logger.info(f"[Discord:Slash] 슬래시 명령 {len(synced)}개를 등록했어요.")
+        except Exception as e:
+            logger.error(f"[Discord:Slash] 슬래시 명령을 등록하지 못했어요. 기존 텍스트 명령은 계속 사용할 수 있어요.\n   -> {e}")
 
     def send_text_result_sync(self, task_id: str, result: str):
         """스레드에서 호출되어 봇의 루프에 메시지 전송 태스크를 생성하는 함수"""
         # 작업당 한 번만 전송하므로 매핑을 꺼내면서 제거 (누적 방지)
         ctx = self.textdict.pop(task_id, None)
-        if ctx and result:
+        if ctx is None:
+            return
+        if result:
+            if ctx.interaction:
+                # 슬래시 명령은 입력한 내용이 채널에 남지 않으므로 질문을 인용해서 함께 보여줌
+                quoted = _quote_prompt(str(getattr(ctx.interaction.namespace, "prompt", "") or ""))
+                if quoted != "> " and len(quoted) + 1 + len(result) <= 2000:
+                    result = f"{quoted}\n{result}"
             # 비동기 함수인 ctx.send를 메인 루프에서 실행되도록 예약
             self.loop.create_task(ctx.send(result))
+        elif ctx.interaction:
+            # 보낼 응답이 없으면 슬래시 명령의 '생각 중...' 표시를 지움
+            self.loop.create_task(ctx.interaction.delete_original_response())
 
 def bot():
     try:
@@ -514,7 +557,7 @@ def bot():
                 message = f"`{command_name}`은 봇 소유자 또는 명령어 화이트리스트 유저만 사용할 수 있어요."
             else:
                 message = f"`{command_name}`은 서버 관리자 또는 명령어 화이트리스트 유저만 사용할 수 있어요."
-            await ctx.send(message)
+            await ctx.send(message, ephemeral=True)
             if bot.def_channel:
                 guild_name = getattr(getattr(ctx, "guild", None), "name", "DM")
                 channel_name = getattr(getattr(ctx, "channel", None), "name", "unknown")
@@ -697,13 +740,15 @@ def bot():
                 return None
             
         # ==== 커맨드 ====
-        @bot.command(name="jiajoin", description="지아를 음성 채널에 초대해요")
+        @bot.hybrid_command(name="jiajoin", description="지아를 음성 채널에 초대해요")
         async def jiajoin(ctx):
             if ctx.author.voice is None:
                 await ctx.send("먼저 음성 채널에 들어가주세요")
                 if bot.def_channel:
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 채널 접속 실패 (요청자가 음성 채널 연결 상태가 아님)")
                 return
+            # 슬래시 명령은 3초 안에 응답해야 하므로 모델 로드 전에 응답을 미뤄둠
+            await ctx.defer(ephemeral=not config.join_reply)
             # RAG 인덱스 동기화
             get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
             # 음성 대화에 필요한 모델 로드가 모두 끝난 뒤 음성 채널에 접속
@@ -722,10 +767,11 @@ def bot():
             if bot.def_channel:
                 await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.voice.channel.guild.name}/{ctx.author.voice.channel.name}(으)로의 접속 요청")
 
-        @bot.command(name="jialeave", description="지아를 음성 채널에서 내보네요")
+        @bot.hybrid_command(name="jialeave", description="지아를 음성 채널에서 내보네요")
         async def jialeave(ctx):
             if ctx.voice_client:
                 voice_client = ctx.voice_client
+                await ctx.defer(ephemeral=not config.leave_reply)
                 # RAG 인덱스 저장
                 get_rag_instance(ctx.guild.id).save_all()
                 # 먼저 말 걸기 유휴 감시 중단
@@ -762,14 +808,15 @@ def bot():
                 print("로그 채널 연결에 성공했어요")
                 await bot.def_channel.send("Project Jia 온라인!")
 
-        @bot.command(name="jiaping", description="지아가 응답할 수 있는지 확인해요")
+        @bot.hybrid_command(name="jiaping", description="지아가 응답할 수 있는지 확인해요")
         async def jiaping(ctx):
             await ctx.send("pong!")
 
-        @bot.command(name="jiareload", description="지아의 설정을 다시 불러와요")
+        @bot.hybrid_command(name="jiareload", description="지아의 설정을 다시 불러와요")
         async def jiareload(ctx):
             if not await require_command_access(ctx, "owner", "/jiareload"):
                 return
+            await ctx.defer()
             try:
                 from config.config_manager import config as global_config
                 from LLM.langchain_llm import reload_llm
@@ -796,7 +843,7 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 설정 재로딩 실패 ({e})")
                 logger.error(f"[Discord:Reload] 설정을 다시 불러오는 과정에 오류가 발생했어요. :(\n   -> {e}")
 
-        @bot.command(name="jiasavesetting", description="지아의 설정을 저장해요")
+        @bot.hybrid_command(name="jiasavesetting", description="지아의 설정을 저장해요")
         async def jiasavesetting(ctx):
             if not await require_command_access(ctx, "owner", "/jiasavesetting"):
                 return
@@ -813,10 +860,11 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 설정 저장 실패 ({e})")
                 logger.error(f"[Discord:Save_Setting] 설정을 저장하는 과정에 오류가 발생했어요. :(\n   -> {e}")
 
-        @bot.command(name="jiaunloadmodel", description="지아의 LLM 모델을 메모리에서 내려요.")
+        @bot.hybrid_command(name="jiaunloadmodel", description="지아의 LLM 모델을 메모리에서 내려요.")
         async def jiaunloadmodel(ctx):
             if not await require_command_access(ctx, "owner", "/jiaunloadmodel"):
                 return
+            await ctx.defer()
             try:
                 model_name = config.llmModel
                 # 백그라운드 스레드에서 모델 언로드 함수 실행
@@ -830,7 +878,7 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 모델 언로드 실패 ({e})")
                 logger.error(f"[Discord:Unload_Model] 모델을 언로드하는 과정에 오류가 발생했어요. :(\n   -> {e}")
 
-        @bot.command(name="jiarestart", description="지아를 재시작해요. 재시작이 필요한 설정 변경(임베딩 모델 등)을 반영할 때 사용해요.")
+        @bot.hybrid_command(name="jiarestart", description="지아를 재시작해요. 재시작이 필요한 설정 변경(임베딩 모델 등)을 반영할 때 사용해요.")
         async def jiarestart(ctx):
             if not await require_command_access(ctx, "owner", "/jiarestart"):
                 return
@@ -860,13 +908,16 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 재시작 실패 ({e})")
                 logger.error(f"[Discord:Restart] 재시작 과정에 오류가 발생했어요. :(\n   -> {e}")
 
-        @bot.command(name="jia", description="지아와 대화해요")
+        @bot.hybrid_command(name="jia", description="지아와 대화해요")
+        @app_commands.describe(prompt="지아에게 할 말")
         async def jia(ctx, *, prompt: str):
             try:
-                async with ctx.channel.typing():
+                # 슬래시 명령이면 '생각 중...'으로 응답을 미루고, 대답은 나중에 send_text_result_sync가 보냄
+                async with ctx.typing():
                     get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
                     textgen = TextGen(ctx)
                     textgen.text_gen_requestor(prompt)
+                    ctx.reply_pending = True
             except Exception as e:
                 await ctx.send(f"지아와 대화 중 오류 발생: {e}")
                 if bot.def_channel:
@@ -874,13 +925,15 @@ def bot():
                 logger.error(f"[Discord:Chat] 지아와 대화하는 과정에 오류가 발생했어요. :(\n   -> {e}")
                 return
         
-        @bot.command(name="지아", description="지아와 대화해요")
+        @bot.hybrid_command(name="지아", description="지아와 대화해요")
+        @app_commands.describe(prompt="지아에게 할 말")
         async def 지아(ctx, *, prompt: str):
             try:
-                async with ctx.channel.typing():
+                async with ctx.typing():
                     get_rag_instance(ctx.guild.id).sync_all_metadata_to_faiss()
                     textgen = TextGen(ctx)
                     textgen.text_gen_requestor(prompt)
+                    ctx.reply_pending = True
             except Exception as e:
                 await ctx.send(f"지아와 대화 중 오류 발생: {e}")
                 if bot.def_channel:
@@ -888,13 +941,15 @@ def bot():
                 logger.error(f"[Discord:Chat] 지아와 대화하는 과정에 오류가 발생했어요. :(\n   -> {e}")
                 return
 
-        @bot.command(name="jiasay", description="지아가 음성 채널에서 말해요")
+        @bot.hybrid_command(name="jiasay", description="지아가 음성 채널에서 말해요")
+        @app_commands.describe(text="지아가 읽을 문장")
         async def jiasay(ctx, *, text: str):
             if ctx.voice_client is None:
                 await ctx.send("먼저 지아를 음성 채널에 초대해주세요")
                 if bot.def_channel:
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 재생 실패 (지아가 음성 채널에 접속하지 않음)")
                 return
+            await ctx.defer(ephemeral=True)
             try:
                 from discord_interface.espnet_tts_output import ensure_tts_model_loaded
                 await asyncio.to_thread(ensure_tts_model_loaded)
@@ -907,8 +962,9 @@ def bot():
                 logger.error(f"[Discord:TTS] 음성을 재생하는 과정에 오류가 발생했어요. :(\n   -> {e}")
                 return
 
-        @bot.command(name="jiahear", description="지아가 음성 채널에서 듣고 텍스트로 변환해줘요")
-        async def jiahear(ctx, textID: int = None):
+        @bot.hybrid_command(name="jiahear", description="지아가 음성 채널에서 듣고 텍스트로 변환해줘요")
+        @app_commands.describe(channel="받아 적은 내용을 보낼 텍스트 채널 (비우면 디버그 채널)")
+        async def jiahear(ctx, channel: Optional[discord.TextChannel] = None):
             if not await require_command_access(ctx, "admin", "/jiahear"):
                 return
             if ctx.author.voice is None:
@@ -917,22 +973,15 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 채널 접속 실패 (요청자가 음성 채널 연결 상태가 아님)")
                 return
 
-            textchan = None
-            if not textID:
-                textchan = bot.def_channel
-                if not textchan or not isinstance(textchan, discord.TextChannel):
-                    await ctx.send("텍스트 채널 ID를 입력해주세요")
-                    if bot.def_channel:
-                        await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 인식 실패 (텍스트 채널 ID 입력되지 않음)")
-                    return
-            else:
-                textchan = bot.get_channel(textID)
-                if not textchan or not isinstance(textchan, discord.TextChannel):
-                    await ctx.send("텍스트 채널 ID가 올바르지 않아요")
-                    if bot.def_channel:
-                        await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 인식 실패 (올바르지 않은 텍스트 채널 ID)")
-                    return
+            # 채널 ID는 슬래시 명령의 정수 범위를 넘으므로 채널 선택(텍스트 명령에서는 ID/멘션)으로 받음
+            textchan = channel or bot.def_channel
+            if not textchan or not isinstance(textchan, discord.TextChannel):
+                await ctx.send("받아 적은 내용을 보낼 텍스트 채널을 지정해주세요")
+                if bot.def_channel:
+                    await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 인식 실패 (텍스트 채널 지정되지 않음)")
+                return
 
+            await ctx.defer(ephemeral=not config.join_reply)
             voice_channel = ctx.author.voice.channel
             # 듣기 전용 모드도 첫 발화에서 로딩이 걸리지 않도록 Whisper를 먼저 로드
             await asyncio.to_thread(ensure_whisper_model_loaded)
@@ -947,7 +996,8 @@ def bot():
             if bot.def_channel:
                 await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.voice.channel.guild.name}/{ctx.author.voice.channel.name}(으)로의 접속 요청")
 
-        @bot.command(name="jiaplay", description="지아가 음성 채널에서 오디오 파일을 재생해요")
+        @bot.hybrid_command(name="jiaplay", description="지아가 음성 채널에서 오디오 파일을 재생해요")
+        @app_commands.describe(file_path="봇 PC의 오디오 파일 경로")
         async def jiaplay(ctx, file_path: str):
             if not config.allow_unsafe_jiaplay:
                 await ctx.send(
@@ -982,8 +1032,17 @@ def bot():
                 logger.error(f"[Discord:Play] 오디오 파일을 재생하는 과정에 오류가 발생했어요. :(\n   -> {e}")
                 return    
 
-        @bot.command(name="jiamusic", description="배경 음악을 재생하거나 제어해요")
-        async def jiamusic(ctx, action: str = "status", *, arg: str = ""):
+        @bot.hybrid_command(name="jiamusic", description="배경 음악을 재생하거나 제어해요")
+        @app_commands.describe(
+            action="할 일 (비우면 status)",
+            arg="play/queue: 유튜브 URL·재생목록·검색어, volume: 0.0~1.0",
+        )
+        async def jiamusic(
+            ctx,
+            action: Literal["play", "queue", "stop", "skip", "pause", "resume", "volume", "status", "help"] = "status",
+            *,
+            arg: str = "",
+        ):
             action = (action or "status").lower()
             voice_client = ctx.voice_client
             if not isinstance(voice_client, discord.VoiceClient):
@@ -1062,7 +1121,7 @@ def bot():
                 logger.error(f"[Discord:Music] 음악을 제어하는 과정에 오류가 발생했어요. :(\n   -> {e}")
                 return
         
-        @bot.command(name="jiastop", description="지아가 음성 채널에서 재생 중인 오디오를 멈춰요")
+        @bot.hybrid_command(name="jiastop", description="지아가 음성 채널에서 재생 중인 오디오를 멈춰요")
         async def jiastop(ctx):
             voice_client = ctx.voice_client
             if not isinstance(voice_client, discord.VoiceClient):
@@ -1099,13 +1158,14 @@ def bot():
                 logger.error(f"[Discord:Stop] 오디오 재생을 멈추는 과정에 오류가 발생했어요. :(\n   -> {e}")
                 return
             
-        @bot.command(name="jiajoinnoagent", description="지아를 음성 채널에 초대해요 (음성 인식 없이)")
+        @bot.hybrid_command(name="jiajoinnoagent", description="지아를 음성 채널에 초대해요 (음성 인식 없이)")
         async def jiajoinnoagent(ctx):
             if ctx.author.voice is None:
                 await ctx.send("먼저 음성 채널에 들어가주세요")
                 if bot.def_channel:
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 음성 채널 접속 실패 (요청자가 음성 채널 연결 상태가 아님)")
                 return
+            await ctx.defer(ephemeral=not config.join_reply)
             voice_channel = ctx.author.voice.channel
             await voice_channel.connect()
             logger.info(f"[Discord:JoinNoAgent] 음성 채널에 접속할게요 -> {voice_channel.name}")
@@ -1114,8 +1174,19 @@ def bot():
             if bot.def_channel:
                 await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : {ctx.author.voice.channel.guild.name}/{ctx.author.voice.channel.name}(으)로의 접속 요청 (음성 인식 없이)")
 
-        @bot.command(name="jiamemory", description="지아의 기억을 관리해요")
-        async def jiamemory(ctx, action: str = "help", *, arg: str = ""):
+        @bot.hybrid_command(name="jiamemory", description="지아의 기억을 관리해요")
+        @app_commands.describe(
+            action="할 일 (비우면 사용법)",
+            arg="list: 페이지, search: 검색어, delete: 기억 ID, profile: 사용자 이름",
+        )
+        async def jiamemory(
+            ctx,
+            action: Literal["list", "search", "delete", "profile", "optout", "optin", "status", "help"] = "help",
+            *,
+            arg: str = "",
+        ):
+            # 검색/인덱스 재생성은 3초를 넘길 수 있어 슬래시 명령 응답을 미뤄둠
+            await ctx.defer()
             try:
                 rag = get_rag_instance(ctx.guild.id)
                 action = action.lower()
@@ -1232,7 +1303,7 @@ def bot():
                     await bot.def_channel.send(f"{ctx.channel.guild.name}/{ctx.channel.name} : 기억 관리 오류 ({e})")
                 logger.error(f"[Discord:Memory] 기억을 관리하는 과정에 오류가 발생했어요. :(\n   -> {e}")
 
-        @bot.command(name="jiatalk", description="지아와 대화를 시작해요. (대화에 /jia를 붙이지 않아도 괜찮아요.)")
+        @bot.hybrid_command(name="jiatalk", description="지아와 대화를 시작해요. (대화에 /jia를 붙이지 않아도 괜찮아요.)")
         async def jiatalk(ctx):
             if not await require_command_access(ctx, "admin", "/jiatalk"):
                 return
@@ -1247,7 +1318,7 @@ def bot():
             bot.autotalk_channels[ctx.guild.id].add(ctx.channel.id)
             await ctx.send(f"이제부터 이 채널에서 `/jia` 없이 대화할 수 있어요. 이 채널에서 대화를 종료하려면 `/jiastoptalk`를 입력해주세요.")
 
-        @bot.command(name="jiastoptalk", description="지아의 대화를 종료해요")
+        @bot.hybrid_command(name="jiastoptalk", description="지아의 대화를 종료해요")
         async def jiastoptalk(ctx):
             if not await require_command_access(ctx, "admin", "/jiastoptalk"):
                 return
@@ -1260,6 +1331,34 @@ def bot():
             if not llm_still_in_use():
                 await asyncio.to_thread(unload_ollama_model, config.llmModel)
             await ctx.send("이 채널의 대화 기능을 종료했어요.")
+
+        @bot.after_invoke
+        async def ensure_slash_reply(ctx):
+            # 슬래시 명령은 응답하지 않으면 '응답하지 않음' 오류로 표시되므로,
+            # 응답을 보내지 않은 명령은 본인에게만 보이는 '생각 중...'으로 응답한 뒤 바로 지워 흔적 없이 끝냄
+            if not ctx.interaction or ctx.replied or ctx.reply_pending:
+                return
+            try:
+                if not ctx.interaction.response.is_done():
+                    await ctx.interaction.response.defer(ephemeral=True, thinking=True)
+                await ctx.interaction.delete_original_response()
+            except discord.HTTPException as e:
+                logger.warning(f"[Discord:Slash] /{ctx.command} 응답을 정리하지 못했어요.\n   -> {e}")
+
+        @bot.event
+        async def on_command_error(ctx, error):
+            if isinstance(error, commands.CommandNotFound):
+                return
+            if isinstance(error, commands.UserInputError) and ctx.command:
+                usage = f"/{ctx.command.qualified_name} {ctx.command.signature}".strip()
+                await ctx.send(f"명령어 입력이 올바르지 않아요: {error}\n사용법: `{usage}`", ephemeral=True)
+                return
+            original = getattr(error, "original", error)
+            logger.error(f"[Discord:Command] /{ctx.command} 명령을 처리하는 과정에 오류가 발생했어요. :(\n   -> {original}")
+            try:
+                await ctx.send(f"명령 처리 중 오류 발생: {original}", ephemeral=True)
+            except discord.HTTPException:
+                pass
 
         @bot.event
         async def on_message(message):

@@ -144,6 +144,19 @@ class Beta120StaticTests(unittest.TestCase):
         ]:
             self.assertIn(marker, discord_bot + config)
 
+    def test_commands_are_registered_as_slash_commands(self):
+        discord_bot = read_text("discord_interface/discordBot.py")
+        self.assertNotIn("@bot.command(", discord_bot)
+        self.assertGreaterEqual(discord_bot.count("@bot.hybrid_command("), 18)
+        for marker in [
+            "await self.tree.sync()",
+            "class JiaContext(commands.Context)",
+            "async def ensure_slash_reply(ctx)",
+            "ctx.reply_pending = True",
+            "channel: Optional[discord.TextChannel] = None",
+        ]:
+            self.assertIn(marker, discord_bot)
+
     def test_llm_runtime_keeps_models_and_avoids_nested_event_loop(self):
         langchain_llm = read_text("LLM/langchain_llm.py")
         model_control = read_text("LLM/LLM_model_control.py")
