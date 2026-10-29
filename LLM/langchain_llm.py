@@ -343,7 +343,33 @@ def generate_response(user: str, guild: int, prompt: str) -> str:
 # 음성 대화에서 LLM이 "응답하지 않는 것이 자연스럽다"고 판단했을 때 출력하는 마커
 VOICE_PASS_MARKER = "[PASS]"
 
-def _build_voice_input(utterances: list[tuple[str, str]], interrupted: bool = False, participants: list[str] = None, profile_note: str = "", proactive: bool = False) -> str:
+def _build_interruption_notice(report: dict) -> str:
+    """사용자가 지아의 말을 끊었을 때, 실제로 어디까지 들렸는지 LLM에 알려주는 안내문을 만듭니다.
+
+    대화 기록에는 응답 전체가 남아 있으므로, 이 안내가 없으면 LLM은 끝까지 말했다고 생각합니다.
+    report: {"heard": 끝까지 재생된 문장들, "cut": 말하던 도중 끊긴 문장, "cut_progress": 그 문장의 재생 비율}
+    """
+    heard = " ".join(report.get("heard") or [])
+    cut = report.get("cut")
+    if not heard and not cut:
+        return (
+            "(참고: 너의 직전 응답은 음성으로 재생되던 도중 사용자가 말을 시작해서 중단됐어. "
+            "사용자들은 그 응답을 끝까지 듣지 못했을 수 있어. 이 점을 감안해서 자연스럽게 대화를 이어가줘.)\n\n"
+        )
+    parts = ["(참고: 너의 직전 응답은 음성으로 말하던 도중 사용자가 말을 시작해서 끊겼어."]
+    if heard:
+        parts.append(f"사용자에게 끝까지 들린 부분은 \"{heard}\"야.")
+    else:
+        parts.append("첫 문장도 끝까지 말하지 못했어.")
+    if cut:
+        parts.append(f"\"{cut}\"는 말하던 도중(약 {report.get('cut_progress', 0):.0%}) 끊겼어.")
+    parts.append(
+        "대화 기록에는 직전 응답 전체가 남아 있지만, 그 뒤 내용은 사용자가 듣지 못했어. "
+        "끊고 들어온 사용자의 말에 먼저 반응하고, 못 전한 내용이 아직 중요하면 짧게만 다시 말해줘.)\n\n"
+    )
+    return " ".join(parts)
+
+def _build_voice_input(utterances: list[tuple[str, str]], interrupted: bool | dict = False, participants: list[str] = None, profile_note: str = "", proactive: bool = False) -> str:
     """발화 묶음을 화자 라벨이 붙은 다인 대화 입력으로 구성합니다.
 
     participants가 주어지면 현재 음성 채널 참가자 목록을 함께 전달해,
@@ -368,10 +394,7 @@ def _build_voice_input(utterances: list[tuple[str, str]], interrupted: bool = Fa
     lines = "\n".join(f"{speaker}: {text}" for speaker, text in utterances)
     notice = ""
     if interrupted:
-        notice = (
-            "(참고: 너의 직전 응답은 음성으로 재생되던 도중 사용자가 말을 시작해서 중단됐어. "
-            "사용자들은 그 응답을 끝까지 듣지 못했을 수 있어. 이 점을 감안해서 자연스럽게 대화를 이어가줘.)\n\n"
-        )
+        notice = _build_interruption_notice(interrupted if isinstance(interrupted, dict) else {})
 
     if participants and len(participants) == 1:
         # 1대1 상황: 발화 상대가 지아뿐이므로 침묵하지 않고 응답하는 쪽으로 안내
@@ -392,11 +415,11 @@ def _build_voice_input(utterances: list[tuple[str, str]], interrupted: bool = Fa
         f"{guidance}"
     )
 
-async def astream_call_response(guild: int, utterances: list[tuple[str, str]], interrupted: bool = False, participants: list[str] = None, proactive: bool = False):
+async def astream_call_response(guild: int, utterances: list[tuple[str, str]], interrupted: bool | dict = False, participants: list[str] = None, proactive: bool = False):
     """발화 묶음에 대한 LLM 응답을 스트리밍하고 문장 단위로 yield하는 비동기 제너레이터
 
     utterances: (화자 이름, 발화 텍스트) 목록. 여러 화자의 발화를 한 번에 전달할 수 있습니다.
-    interrupted: 직전 응답 재생이 사용자 발화로 중단(인터럽트)되었음을 LLM에 알립니다.
+    interrupted: 직전 응답 재생이 사용자 발화로 중단(인터럽트)되었음을 LLM에 알립니다. dict면 어디까지 들렸는지 함께 알려줍니다.
     participants: 현재 음성 채널 참가자(봇 제외) 이름 목록. 발화 대상 판단의 참고 자료로 전달됩니다.
     proactive: True면 발화 없이 지아가 먼저 말을 걸어볼지 판단합니다. (utterances는 비어 있어야 함)
     LLM이 응답할 상황이 아니라고 판단하면(응답이 [PASS]로 시작) 아무것도 yield하지 않습니다.

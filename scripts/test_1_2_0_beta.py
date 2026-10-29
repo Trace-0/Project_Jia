@@ -196,6 +196,8 @@ class Beta120VoiceInputTests(unittest.TestCase):
         self.assertIn("pipeline.note_voice_packet(self.guild.id)", discord_bot)
         for marker in [
             "def _required_quiet_sec",
+            "def _turn_verdict_for",
+            "SENTENCE_END_MARKS",
             "SMART_TURN_COMPLETE_WAIT_SEC",
             "config.voice_smart_turn_incomplete_wait_sec",
             "predict_turn_complete, turn_audio",
@@ -206,8 +208,54 @@ class Beta120VoiceInputTests(unittest.TestCase):
         smart_turn = read_text("discord_interface/smart_turn.py")
         self.assertIn("smart-turn-v3.2-cpu.onnx", smart_turn)
         self.assertIn("return None", smart_turn)
+        tts = read_text("discord_interface/espnet_tts_output.py")
+        for marker in ["def _pause_after", "config.tts_sentence_pause_ms", "config.tts_comma_pause_ms", "% FRAME_SAMPLES_48K"]:
+            self.assertIn(marker, tts)
         # 발화 종료 감지(패킷 0.1초 끊김) 디바운스는 그대로 유지
         self.assertIn("self.last_packet_time[user.id] = time.monotonic()", discord_bot)
+
+    def test_barge_in_fades_out_and_reports_what_was_heard(self):
+        discord_bot = read_text("discord_interface/discordBot.py")
+        pipeline = read_text("discord_interface/pipeline.py")
+        for marker in [
+            "class PCMBufferSource(discord.AudioSource)",
+            "_pcm_source_from_wav(audio_source",
+            "FADE_OUT_FRAMES",
+            "def pop_interruption_report",
+            "self._remember_heard_locked(guild_id, foreground, finished=True)",
+            "def _confirm_interrupt",
+            "pipeline.contains_speech_48k",
+            "self._next_interrupt_check",
+        ]:
+            self.assertIn(marker, discord_bot)
+        for marker in [
+            "def _queue_tts_audio",
+            "audio_data._jia_text = text",
+            "tts_and_play(sentence, guild, stream_task_id, cancel_event)",
+            "manager.pop_interruption_report(guild)",
+            "def contains_speech_48k",
+        ]:
+            self.assertIn(marker, pipeline)
+        self.assertIn("with _model_lock:", read_text("discord_interface/vad.py"))
+
+    def test_interruption_notice_tells_llm_what_was_heard(self):
+        import ast
+        source = read_text("LLM/langchain_llm.py")
+        func = next(
+            node for node in ast.parse(source).body
+            if isinstance(node, ast.FunctionDef) and node.name == "_build_interruption_notice"
+        )
+        namespace: dict = {}
+        exec(compile(ast.Module(body=[func], type_ignores=[]), "langchain_llm.py", "exec"), namespace)
+        notice = namespace["_build_interruption_notice"]
+
+        text = notice({"heard": ["응, 나도 봤어."], "cut": "진짜 재밌더라!", "cut_progress": 0.5, "unsaid": ["너는 어땠어?"]})
+        self.assertIn("응, 나도 봤어.", text)
+        self.assertIn("진짜 재밌더라!", text)
+        self.assertIn("50%", text)
+        self.assertNotIn("너는 어땠어?", text)
+        self.assertIn("첫 문장도", notice({"heard": [], "cut": "진짜 재밌더라!", "cut_progress": 0.2}))
+        self.assertIn("끝까지 듣지 못했을 수 있어", notice({}))
 
     def test_whisper_language_candidates_and_hallucination_filter(self):
         class FakeWhisper:
@@ -256,7 +304,9 @@ class Beta120ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.whisper_languages, ["ko", "en", "ja"])
         self.assertEqual(cfg.voice_turn_grace_sec, 0.7)
         self.assertTrue(cfg.voice_smart_turn)
-        self.assertEqual(cfg.voice_smart_turn_incomplete_wait_sec, 2.0)
+        self.assertEqual(cfg.voice_smart_turn_incomplete_wait_sec, 1.2)
+        self.assertEqual(cfg.tts_sentence_pause_ms, 350)
+        self.assertEqual(cfg.tts_comma_pause_ms, 150)
         self.assertIn("command_whitelist_user_ids", config_module.FIELD_TO_TOML)
         self.assertIn("llm_tools", config_module.FIELD_TO_TOML)
         default_mcp = config_module.DEFAULT_MCP_SERVERS()["ddg-search"]

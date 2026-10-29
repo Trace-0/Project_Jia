@@ -1,10 +1,13 @@
 import torch
 import logging
+import threading
 from config.config_manager import config
 
 # Load the Silero VAD model via torch.hub (one-time global load):contentReference[oaicite:3]{index=3}
 model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad')
 (get_speech_timestamps, _, _, _, _) = utils
+# 모델이 내부 상태를 가지므로 여러 스레드(사용자별 음성 변환, 끼어들기 확인)가 동시에 쓰지 않게 잠금
+_model_lock = threading.Lock()
 
 def pad_timestamps(timestamps, sample_rate, padding_ms):
     padding = int(sample_rate * padding_ms / 1000)
@@ -18,10 +21,11 @@ def get_speech_timestamps_from_array(audio_np, sampling_rate=16000):
     Returns a list of {'start':sample_index, 'end':sample_index} segments.
     """
     try:
-        model.reset_states()
+        with _model_lock:
+            model.reset_states()
 
-        # Run VAD (it returns list of speech segments in samples)
-        speech_timestamps = get_speech_timestamps(audio_np, model,
+            # Run VAD (it returns list of speech segments in samples)
+            speech_timestamps = get_speech_timestamps(audio_np, model,
                                                 threshold=config.vad_threshold,
                                                 min_speech_duration_ms=config.vad_min_speech_ms,
                                                 min_silence_duration_ms=config.vad_min_silence_ms,

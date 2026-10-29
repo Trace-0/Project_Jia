@@ -7,6 +7,7 @@ import logging
 import time
 import numpy as np
 import audioop
+import wave
 from discord_interface.faster_whisper_output import reload_whisper_model, ensure_whisper_model_loaded
 import asyncio
 import threading
@@ -33,6 +34,55 @@ PCM_FRAME_BYTES = 3840  # 48kHz, 16-bit, stereo, 20ms
 PCM_SILENCE = b"\x00" * PCM_FRAME_BYTES
 MUSIC_FFMPEG_BEFORE_OPTIONS = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 MUSIC_FFMPEG_OPTIONS = "-vn"
+
+
+FADE_OUT_FRAMES = 5  # 재생을 끊을 때 소리를 줄여 나가는 길이 (20ms x 5 = 100ms). 파형을 갑자기 자르면 '틱' 소리가 남
+
+
+class PCMBufferSource(discord.AudioSource):
+    """메모리에 있는 48kHz 16-bit 스테레오 PCM을 20ms 프레임으로 내보내는 AudioSource
+
+    문장마다 FFmpeg 프로세스를 띄우면 첫 read()가 프레임 간격(20ms)보다 오래 걸려 재생이 끊길 수 있어서,
+    직접 만든 WAV(TTS 등)는 프로세스 없이 바로 재생합니다. text에는 이 음성이 말하는 문장을 담아
+    재생 중 끊겼을 때 어디까지 들렸는지 기록하는 데 씁니다.
+    """
+
+    def __init__(self, pcm: bytes, text: str | None = None):
+        self._pcm = pcm
+        self._pos = 0
+        self.text = text
+
+    def read(self) -> bytes:
+        if self._pos >= len(self._pcm):
+            return b""
+        frame = self._pcm[self._pos:self._pos + PCM_FRAME_BYTES]
+        self._pos += PCM_FRAME_BYTES
+        if len(frame) < PCM_FRAME_BYTES:
+            frame += b"\x00" * (PCM_FRAME_BYTES - len(frame))
+        return frame
+
+    def progress(self) -> float:
+        return min(1.0, self._pos / len(self._pcm)) if self._pcm else 1.0
+
+    def is_opus(self) -> bool:
+        return False
+
+
+def _pcm_source_from_wav(buffer, text: str | None = None) -> PCMBufferSource | None:
+    """48kHz 16-bit WAV를 메모리 재생 소스로 바꿉니다. 형식이 다르면 None (FFmpeg로 재생)"""
+    try:
+        buffer.seek(0)
+        with wave.open(buffer, "rb") as wav:
+            if wav.getsampwidth() != 2 or wav.getframerate() != 48000 or wav.getnchannels() not in (1, 2):
+                return None
+            pcm = wav.readframes(wav.getnframes())
+            if wav.getnchannels() == 1:
+                pcm = audioop.tostereo(pcm, 2, 1, 1)
+        return PCMBufferSource(pcm, text)
+    except (wave.Error, EOFError):
+        return None
+    finally:
+        buffer.seek(0)
 
 
 class MixedAudioSource(discord.AudioSource):
@@ -69,6 +119,10 @@ class AudioStreamManager:
         self._music_loading: set[int] = set()
         self._music_generation: dict[int, int] = {}
         self._mixer_active: dict[int, bool] = {}
+        self._fading: dict[int, tuple[discord.AudioSource, float, int]] = {}  # 끊긴 소리 (소스, 볼륨, 남은 프레임)
+        # 지아가 말한 응답(task_id) 중 끝까지 재생된 문장들. 재생이 끊겼을 때 어디까지 들렸는지 알려주는 데 씀
+        self._heard: dict[int, tuple[str, list[str]]] = {}
+        self._interruptions: dict[int, dict] = {}
         self._lock = threading.RLock()
 
     def add_to_queue(self, guild_id: int, task_id: str, audio_source):
@@ -85,7 +139,7 @@ class AudioStreamManager:
                 self.playing[guild_id] = False
             if task_id not in self.streams[guild_id]:
                 self.streams[guild_id][task_id] = deque()
-            self.streams[guild_id][task_id].append((source, volume))
+            self.streams[guild_id][task_id].append((source, volume, task_id))
         logger.info(f"오디오 스트림 큐에 추가: 서버({guild_id})")
 
         self._schedule_mixer(guild_id)
@@ -95,6 +149,9 @@ class AudioStreamManager:
             return audio_source
         if isinstance(audio_source, str):
             return discord.FFmpegPCMAudio(audio_source)
+        pcm_source = _pcm_source_from_wav(audio_source, getattr(audio_source, "_jia_text", None))
+        if pcm_source is not None:
+            return pcm_source
         return discord.FFmpegPCMAudio(audio_source, pipe=True)
 
     def _schedule_mixer(self, guild_id: int):
@@ -173,6 +230,42 @@ class AudioStreamManager:
         duck_percent = max(0.0, min(100.0, float(config.music_duck_percent)))
         return volume * (1.0 - duck_percent / 100.0)
 
+    def _ramp_frame(self, frame: bytes, start_gain: float, end_gain: float) -> bytes:
+        """프레임 안에서 볼륨을 샘플 단위로 서서히 바꿉니다. (프레임 단위로 바꾸면 계단 소리가 남)"""
+        samples = np.frombuffer(self._pad_frame(frame), dtype=np.int16).reshape(-1, 2).astype(np.float32)
+        ramp = np.linspace(start_gain, end_gain, len(samples), endpoint=False, dtype=np.float32)[:, None]
+        return (samples * ramp).astype(np.int16).tobytes()
+
+    def _read_fading_frame_locked(self, guild_id: int) -> bytes:
+        fading = self._fading.get(guild_id)
+        if not fading:
+            return b""
+        source, volume, frames_left = fading
+        frame = source.read() if frames_left > 0 else b""
+        if not frame:
+            self._cleanup_source(source)
+            self._fading.pop(guild_id, None)
+            return b""
+        start = volume * frames_left / FADE_OUT_FRAMES
+        end = volume * (frames_left - 1) / FADE_OUT_FRAMES
+        self._fading[guild_id] = (source, volume, frames_left - 1)
+        return self._ramp_frame(frame, start, end)
+
+    def _remember_heard_locked(self, guild_id: int, foreground, finished: bool):
+        """TTS 문장이 재생되기 시작하거나 끝까지 재생됐을 때, 이번 응답에서 들린 문장 목록을 갱신합니다."""
+        source = self._foreground_source(foreground)
+        text = getattr(source, "text", None)
+        if not text or not isinstance(foreground, tuple) or len(foreground) < 3:
+            return
+        task_id = foreground[2]
+        current_task, texts = self._heard.get(guild_id, (None, []))
+        if current_task != task_id:
+            # 새 응답이 시작됨
+            current_task, texts = task_id, []
+            self._heard[guild_id] = (current_task, texts)
+        if finished:
+            texts.append(text)
+
     def _mix_frames(self, music_frame: bytes, foreground_frame: bytes, music_gain: float, foreground_gain: float = 1.0) -> bytes:
         mixed = PCM_SILENCE
         if music_frame:
@@ -191,6 +284,8 @@ class AudioStreamManager:
                 if foreground is None:
                     foreground = self._pop_next_foreground_locked(guild_id)
                     self._current_foreground[guild_id] = foreground
+                    if foreground is not None:
+                        self._remember_heard_locked(guild_id, foreground, finished=False)
                 if foreground is None:
                     self.playing[guild_id] = False
                     break
@@ -200,9 +295,13 @@ class AudioStreamManager:
                 if foreground_frame:
                     self.playing[guild_id] = True
                     break
+                self._remember_heard_locked(guild_id, foreground, finished=True)
                 self._cleanup_source(foreground_source)
                 self._current_foreground[guild_id] = None
                 self.playing[guild_id] = False
+
+            # 끊긴 소리는 갑자기 멈추지 않고 짧게 줄여 나가며 섞음
+            fading_frame = self._read_fading_frame_locked(guild_id)
 
             music_frame = b""
             music = self._music_sources.get(guild_id)
@@ -214,24 +313,64 @@ class AudioStreamManager:
                     self._schedule_next_music(guild_id)
 
             music_active = self._has_music_locked(guild_id)
-            foreground_active = bool(foreground_frame) or self._has_foreground_locked(guild_id)
-            if not foreground_frame and not music_frame and not music_active:
+            foreground_active = bool(foreground_frame or fading_frame) or self._has_foreground_locked(guild_id)
+            if not foreground_frame and not fading_frame and not music_frame and not music_active:
                 return b""
 
             normal_volume = self._music_volumes.get(guild_id, config.music_volume)
             music_gain = self._ducked_volume(normal_volume) if foreground_active else normal_volume
-            return self._mix_frames(music_frame, foreground_frame, music_gain, foreground_gain)
+            mixed = self._mix_frames(music_frame, foreground_frame, music_gain, foreground_gain)
+            if fading_frame:
+                mixed = audioop.add(mixed, fading_frame, 2)
+            return mixed
 
     def stop_foreground(self, guild_id: int) -> int:
+        """TTS/효과음 재생을 멈춥니다. 재생 중이던 소리는 짧게 줄여 나가며 끝냅니다.
+
+        지아의 말이 끊긴 경우 어디까지 들렸는지 기록해 두고, pop_interruption_report()로 꺼낼 수 있습니다.
+        """
         with self._lock:
-            count = sum(len(q) for q in self.streams.get(guild_id, {}).values())
-            if self._current_foreground.get(guild_id) is not None:
+            self._interruptions.pop(guild_id, None)  # 이전 정지에서 남은 기록은 버림
+            queued = [entry for q in self.streams.get(guild_id, {}).values() for entry in q]
+            count = len(queued)
+            current = self._current_foreground.get(guild_id)
+            cut_text, cut_progress = None, 0.0
+            if current is not None:
                 count += 1
-                self._cleanup_source(self._foreground_source(self._current_foreground[guild_id]))
+                source = self._foreground_source(current)
+                cut_text = getattr(source, "text", None)
+                if cut_text and hasattr(source, "progress"):
+                    cut_progress = source.progress()
+                old = self._fading.pop(guild_id, None)
+                if old:
+                    self._cleanup_source(old[0])
+                self._fading[guild_id] = (source, self._foreground_volume(current), FADE_OUT_FRAMES)
+            for entry in queued:
+                self._cleanup_source(self._foreground_source(entry))
+
+            unsaid = [getattr(self._foreground_source(entry), "text", None) for entry in queued]
+            unsaid = [text for text in unsaid if text]
+            if cut_text or unsaid:
+                task_id = current[2] if cut_text and isinstance(current, tuple) and len(current) > 2 else None
+                heard_task, heard = self._heard.get(guild_id, (None, []))
+                self._interruptions[guild_id] = {
+                    "heard": list(heard) if task_id is None or heard_task == task_id else [],
+                    "cut": cut_text,
+                    "cut_progress": cut_progress,
+                    "unsaid": unsaid,
+                }
+
             self.streams.get(guild_id, {}).clear()
             self._current_foreground[guild_id] = None
             self.playing[guild_id] = False
-            return count
+        if current is not None:
+            self._schedule_mixer(guild_id)  # 줄여 나가는 소리가 마저 재생되도록 믹서 유지
+        return count
+
+    def pop_interruption_report(self, guild_id: int) -> dict | None:
+        """마지막으로 끊긴 지아의 말이 어디까지 들렸는지 꺼냅니다. {"heard", "cut", "cut_progress", "unsaid"}"""
+        with self._lock:
+            return self._interruptions.pop(guild_id, None)
 
     def _has_music_locked(self, guild_id: int) -> bool:
         return (
@@ -432,6 +571,12 @@ class AudioStreamManager:
 
     def stop_all(self, guild_id: int):
         self.stop_foreground(guild_id)
+        with self._lock:
+            fading = self._fading.pop(guild_id, None)
+            self._heard.pop(guild_id, None)
+            self._interruptions.pop(guild_id, None)
+        if fading:
+            self._cleanup_source(fading[0])
         self.stop_music(guild_id)
 
 class JiaContext(commands.Context):
@@ -617,7 +762,9 @@ def bot():
                 self.last_packet_time: dict[int, float] = {} # 사용자별 마지막 패킷 수신 시각 (monotonic)
                 # 발화 종료 대기 시간과 barge-in 판정 시간은 config(voice_timeout_sec, voice_interrupt_speech_sec)에서
                 # 사용 시점에 읽으므로 settings.toml 수정만으로 즉시 반영됩니다.
-                self._interrupt_fired: set[int] = set() # 이번 발화에서 이미 인터럽트를 보낸 사용자
+                self._interrupt_fired: set[int] = set() # 이번 발화에서 이미 인터럽트를 보냈거나 확인 중인 사용자
+                # 잡음으로 판정된 사용자는 음성이 이만큼(초) 쌓인 뒤에 다시 확인 (같은 잡음을 매 패킷마다 검사하지 않도록)
+                self._next_interrupt_check: dict[int, float] = {}
                 self.guild = guild
                 self.loop = bot.loop
                 self.voice_channel = voice_channel
@@ -666,11 +813,14 @@ def bot():
                 self.buffers[user.id].append(float_data)
 
                 # 지아가 말하는 중에 사용자의 발화가 일정 시간 이상 지속되면 재생을 중단 (barge-in)
+                # 패킷 길이만 보면 마이크 잡음도 끼어들기로 잡히므로, VAD로 실제 말소리인지 확인한 뒤에 멈춤
                 if not self.only_hear and user.id not in self._interrupt_fired:
                     buffered_sec = sum(chunk.size for chunk in self.buffers[user.id]) / 48000.0
-                    if buffered_sec >= config.voice_interrupt_speech_sec and self._tts_audio_active():
+                    threshold = max(config.voice_interrupt_speech_sec, self._next_interrupt_check.get(user.id, 0.0))
+                    if buffered_sec >= threshold and self._tts_audio_active():
                         self._interrupt_fired.add(user.id)
-                        self.loop.call_soon_threadsafe(self._interrupt_playback, user)
+                        snapshot = np.concatenate(self.buffers[user.id])
+                        self.loop.call_soon_threadsafe(self._confirm_interrupt, user, snapshot)
 
             def _tts_audio_active(self) -> bool:
                 """이 길드에서 TTS 오디오가 재생 중이거나 재생 대기 중인지 확인합니다."""
@@ -678,6 +828,20 @@ def bot():
                 if not manager:
                     return False
                 return bool(manager.playing.get(self.guild.id)) or any(manager.streams.get(self.guild.id, {}).values())
+
+            def _confirm_interrupt(self, user: discord.User, audio_48k: np.ndarray):
+                """끼어든 소리가 실제 말소리일 때만 재생을 멈춥니다. (봇 루프에서 실행)"""
+                async def check():
+                    if await asyncio.to_thread(pipeline.contains_speech_48k, audio_48k):
+                        self._interrupt_playback(user)
+                        return
+                    # 잡음이면 멈추지 않고, 음성이 더 쌓이면 다시 확인
+                    # (확인하는 사이 발화가 끝났다면 send_vad_and_whisper가 이미 초기화했으므로 건드리지 않음)
+                    if user.id in self._interrupt_fired:
+                        self._next_interrupt_check[user.id] = len(audio_48k) / 48000.0 + config.voice_interrupt_speech_sec
+                        self._interrupt_fired.discard(user.id)
+                    logger.info(f"[Discord:Interrupt] [{user.name}]의 소리가 말소리가 아니라서 재생을 계속해요.")
+                self.loop.create_task(check())
 
             def _interrupt_playback(self, user: discord.User):
                 """지아의 음성 재생을 중단하고, 다음 LLM 호출에서 인터럽트를 인지하도록 표시합니다."""
@@ -706,6 +870,7 @@ def bot():
                 # 사용자의 버퍼를 가져옴
                 user_buffer = self.buffers.pop(user.id, [])
                 self._interrupt_fired.discard(user.id)  # 다음 발화에서 다시 인터럽트 판정 가능하게 초기화
+                self._next_interrupt_check.pop(user.id, None)
                 if not user_buffer:
                     return
 
@@ -724,6 +889,7 @@ def bot():
                 self._current_task.clear()
                 self.buffers.clear()
                 self._interrupt_fired.clear()
+                self._next_interrupt_check.clear()
                 logger.info(f"[Discord:Voice] 음성 수신 sink를 정리했어요. (guild={self.guild.id})")
 
         async def get_channel_sure() -> discord.TextChannel | None:

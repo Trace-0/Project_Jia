@@ -101,6 +101,8 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     },
     "tts": {
         "tts_model": ("model", "TTS(음성 합성) 모델 경로 (변경 시 자동 재로딩)"),
+        "tts_sentence_pause_ms": ("sentence_pause_ms", "문장(. ! ? 등) 뒤에 두는 쉼 (ms). 지아의 다음 문장이 치고 들어오는 느낌이면 늘려주세요"),
+        "tts_comma_pause_ms": ("comma_pause_ms", "쉼표 뒤에 두는 쉼 (ms)"),
     },
     "llm": {
         "llmModel": ("model", "LLM 모델 이름. provider가 ollama면 Ollama 모델, 외부 API면 그 API의 모델 이름 (변경 시 자동 재로딩)"),
@@ -228,6 +230,8 @@ class Config:
     llm_api_base: str = ""  # LLM 서버 주소 재정의 (선택). ollama면 원격 서버 주소, 외부 API면 호환 서버 주소
     llmNumCtx: int = 16384
     tts_model: str = ""
+    tts_sentence_pause_ms: int = 350
+    tts_comma_pause_ms: int = 150
     llmSystemPrompt: str = """너는 "지아"라는 이름의 친구야. 친구처럼 친근한 반말을 사용해.
 
 말투 규칙:
@@ -247,7 +251,7 @@ class Config:
     voice_interrupt_speech_sec: float = 0.5
     voice_turn_grace_sec: float = 0.7
     voice_smart_turn: bool = True
-    voice_smart_turn_incomplete_wait_sec: float = 2.0
+    voice_smart_turn_incomplete_wait_sec: float = 1.2
     proactive_idle_sec: int = 0  # 0이면 먼저 말 걸기 비활성화
 
     # === 사운드보드 자동 반응 (저장 즉시 반영) ===
