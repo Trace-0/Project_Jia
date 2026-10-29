@@ -167,6 +167,10 @@ class AudioStreamManager:
             return frame
         return audioop.mul(frame, 2, volume)
 
+    def _ducked_volume(self, volume: float) -> float:
+        duck_percent = max(0.0, min(100.0, float(config.music_duck_percent)))
+        return volume * (1.0 - duck_percent / 100.0)
+
     def _mix_frames(self, music_frame: bytes, foreground_frame: bytes, music_gain: float, foreground_gain: float = 1.0) -> bytes:
         mixed = PCM_SILENCE
         if music_frame:
@@ -213,7 +217,7 @@ class AudioStreamManager:
                 return b""
 
             normal_volume = self._music_volumes.get(guild_id, config.music_volume)
-            music_gain = config.music_duck_volume if foreground_active else normal_volume
+            music_gain = self._ducked_volume(normal_volume) if foreground_active else normal_volume
             return self._mix_frames(music_frame, foreground_frame, music_gain, foreground_gain)
 
     def stop_foreground(self, guild_id: int) -> int:
@@ -415,7 +419,10 @@ class AudioStreamManager:
                 return "재생 중인 음악이 없습니다."
             state = "일시정지" if guild_id in self._music_paused else "재생 중"
             volume = self._music_volumes.get(guild_id, config.music_volume)
-        return f"음악 {state}: {title} (대기열 {queued}곡, 볼륨 {volume:.2f}, 말할 때 {config.music_duck_volume:.2f})"
+        return (
+            f"음악 {state}: {title} (대기열 {queued}곡, 볼륨 {volume:.2f}, "
+            f"말할 때 {config.music_duck_percent}% 낮춤 → {self._ducked_volume(volume):.2f})"
+        )
 
     def has_music(self, guild_id: int) -> bool:
         with self._lock:

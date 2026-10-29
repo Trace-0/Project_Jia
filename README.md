@@ -155,7 +155,7 @@ CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에�
 | `[soundboard]` `auto_react_cooldown_sec` | `20` | 같은 효과음이 자동으로 다시 재생되기까지의 최소 간격 | 즉시 |
 | `[soundboard]` `auto_react_chance` | `0.35` | 자동 반응 후보가 잡혔을 때 실제로 재생할 확률 | 즉시 |
 | `[music]` `volume` | `0.7` | 배경 음악 기본 볼륨 | 즉시 |
-| `[music]` `duck_volume` | `0.25` | 지아가 말하거나 효과음이 재생될 때 낮출 음악 볼륨 | 즉시 |
+| `[music]` `duck_percent` | `60` | 지아가 말하거나 효과음이 재생될 때 현재 음악 볼륨에서 낮출 비율(%) (예: 볼륨 `0.5`에 `60`이면 `0.2`로 재생) | 즉시 |
 | `[music]` `max_playlist_items` | `50` | 유튜브 재생목록에서 한 번에 추가할 최대 곡 수 | 즉시 |
 | `[security]` `command_whitelist_user_ids` | `[]` | 보호 명령 권한을 우회할 Discord 유저 ID 목록 | 즉시 |
 | `[security]` `music_allowed_url_hosts` | `["youtube.com", "youtu.be"]` | `/jiamusic` URL 입력에서 허용할 호스트 목록 | 즉시 |
@@ -389,7 +389,7 @@ allow_unsafe_jiaplay = true
 
 # 2-6. 배경 음악과 덕킹
 
-`/jiamusic` 명령어로 음성 채널에 유튜브 음악을 틀 수 있어요. `yt-dlp`로 유튜브 단일 영상, 재생목록 URL, 검색어를 받아 재생 큐로 만들고, 각 곡을 재생할 때 실제 오디오 스트림 URL을 가져옵니다. 음악이 재생되는 동안 지아가 TTS로 대답하거나 사운드보드 효과음을 재생하면, 음악 볼륨이 자동으로 `[music] duck_volume`까지 낮아지고 foreground 재생이 끝나면 원래 볼륨으로 돌아갑니다.
+`/jiamusic` 명령어로 음성 채널에 유튜브 음악을 틀 수 있어요. `yt-dlp`로 유튜브 단일 영상, 재생목록 URL, 검색어를 받아 재생 큐로 만들고, 각 곡을 재생할 때 실제 오디오 스트림 URL을 가져옵니다. 음악이 재생되는 동안 지아가 TTS로 대답하거나 사운드보드 효과음을 재생하면, 음악 볼륨이 현재 볼륨에서 자동으로 `[music] duck_percent`%만큼 낮아지고 foreground 재생이 끝나면 원래 볼륨으로 돌아갑니다.
 
 보안을 위해 `/jiamusic`에 URL을 직접 넣는 경우 `[security] music_allowed_url_hosts`에 등록된 호스트만 `yt-dlp`로 전달돼요. 기본값은 `youtube.com` 하위 도메인과 `youtu.be`만 허용합니다. 검색어 입력은 URL이 아니므로 계속 받을 수 있지만, 검색 결과 URL도 허용 호스트 목록을 통과해야 큐에 들어갑니다. `https://example.com/...`, `file://...`, `http://127.0.0.1/...` 같은 임의 URL은 차단됩니다.
 
@@ -481,7 +481,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 29. 사운드보드 자동 반응 기능을 추가했습니다. `[soundboard] auto_react`를 켜면 대화 문맥과 `sounds.toml`의 태그를 바탕으로 효과음을 짧게 자동 재생하며, 효과음별 `cooldown`, `chance`, `auto`, `volume` 설정으로 과한 재생과 볼륨을 조절할 수 있습니다.
 30. ComfyUI 이미지 생성에서 상황별 모델 프로필을 지원합니다. `[comfyui.models.<ID>]`에 체크포인트와 `use_when`/`tags`를 등록하면 지아가 이미지 종류에 맞는 `model_id`를 선택해 생성합니다.
 31. [음성] 배경 음악 재생 명령어 `/jiamusic`를 추가했습니다. stop/pause/resume/volume/status 제어를 지원합니다.
-32. [음성] 오디오 믹서를 추가해 배경 음악과 TTS/효과음을 함께 출력합니다. 지아가 말하거나 효과음을 재생하는 동안 음악 볼륨을 `[music] duck_volume`으로 낮추고, 끝나면 기존 음악 볼륨으로 복구합니다.
+32. [음성] 오디오 믹서를 추가해 배경 음악과 TTS/효과음을 함께 출력합니다. 지아가 말하거나 효과음을 재생하는 동안 음악 볼륨을 현재 볼륨 대비 `[music] duck_percent`%만큼 낮추고, 끝나면 기존 음악 볼륨으로 복구합니다. (예전 `duck_volume` 설정은 처음 실행할 때 자동으로 비율로 환산됩니다)
 33. [음성] `/jiamusic`가 로컬 파일 직접 재생 대신 `yt-dlp` 기반 유튜브 재생을 사용합니다. 유튜브 단일 영상, 검색어, 재생목록을 지원하고 `queue`/`skip`으로 대기열을 제어할 수 있습니다.
 34. [보안] `/jiaplay` 로컬 파일 재생은 기본 비활성화했습니다. Discord 명령으로 봇 PC의 로컬 파일을 읽어 음성 채널에 내보낼 수 있는 위험 기능이므로 `[security] allow_unsafe_jiaplay = true`를 명시적으로 설정한 경우에만 작동합니다.
 35. [보안] `/jiamemory profile`은 서버 관리자 전용으로 변경하고, 일반 사용자는 `/jiamemory status`에서 본인의 기억 설정과 프로필 내용을 함께 확인하도록 변경했습니다.

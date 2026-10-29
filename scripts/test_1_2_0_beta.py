@@ -179,6 +179,26 @@ class Beta120ConfigTests(unittest.TestCase):
         self.assertIn("description", default_mcp)
         self.assertIn("use_when", default_mcp)
 
+    def test_legacy_duck_volume_migrates_to_duck_percent(self):
+        config_module = import_fresh("config.config")
+        tomlkit = config_module.tomlkit
+        cfg = config_module.Config()
+        self.assertIn("music_duck_percent", config_module.FIELD_TO_TOML)
+        self.assertFalse(hasattr(cfg, "music_duck_volume"))
+
+        doc = tomlkit.parse("[music]\nvolume = 0.2\nduck_volume = 0.02\n")
+        cfg._apply_toml(doc)
+        self.assertTrue(cfg._migrate_legacy_toml(doc))
+        self.assertEqual(cfg.music_duck_percent, 90)
+        self.assertNotIn("duck_volume", doc["music"])
+
+        kept = config_module.Config()
+        doc = tomlkit.parse("[music]\nvolume = 0.5\nduck_volume = 0.1\nduck_percent = 30\n")
+        kept._apply_toml(doc)
+        self.assertTrue(kept._migrate_legacy_toml(doc))
+        self.assertEqual(kept.music_duck_percent, 30)
+        self.assertFalse(kept._migrate_legacy_toml(doc))
+
 
 class Beta120McpTests(unittest.TestCase):
     def test_mcp_metadata_is_removed_from_client_spec_and_added_to_guidance(self):

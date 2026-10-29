@@ -56,7 +56,7 @@ TOML_LAYOUT: dict[str, dict[str, tuple[str, str]]] = {
     },
     "music": {
         "music_volume": ("volume", "음악 기본 볼륨 (0.0~1.0)"),
-        "music_duck_volume": ("duck_volume", "지아가 말하거나 효과음을 재생할 때 낮출 음악 볼륨 (0.0~1.0)"),
+        "music_duck_percent": ("duck_percent", "지아가 말하거나 효과음을 재생할 때 현재 음악 볼륨에서 낮출 비율 (0~100%, 0이면 그대로)"),
         "music_max_playlist_items": ("max_playlist_items", "유튜브 재생목록에서 한 번에 추가할 최대 곡 수"),
     },
     "security": {
@@ -250,7 +250,7 @@ class Config:
 
     # === 음악 재생/덕킹 (저장 즉시 반영) ===
     music_volume: float = 0.7
-    music_duck_volume: float = 0.25
+    music_duck_percent: int = 60
     music_max_playlist_items: int = 50
 
     # === 위험 기능 (저장 즉시 반영) ===
@@ -348,6 +348,26 @@ class Config:
         logging.info("[Config:Migration] .env의 JIA_ 설정을 settings.toml로 옮기고, .env에는 외부 서비스 키만 남겼어요. (원본은 .env.bak에 백업)")
         return True
 
+    def _migrate_legacy_toml(self, doc) -> bool:
+        """이름이나 의미가 바뀐 예전 settings.toml 키를 새 키로 옮깁니다. 문서를 고쳤으면 True."""
+        music = doc.get("music")
+        if music is None or "duck_volume" not in music:
+            return False
+        # 예전 duck_volume(말할 때의 절대 볼륨)을 기본 볼륨 대비 감소 비율로 환산
+        if "duck_percent" not in music:
+            duck_volume = float(music["duck_volume"])
+            if self.music_volume > 0:
+                percent = round((1 - duck_volume / self.music_volume) * 100)
+            else:
+                percent = 0
+            self.music_duck_percent = max(0, min(100, percent))
+            logging.info(
+                f"[Config:Migration] [music] duck_volume({duck_volume})을 "
+                f"duck_percent({self.music_duck_percent}%)로 옮겼어요."
+            )
+        del music["duck_volume"]
+        return True
+
     def reload(self):
         """settings.toml에서 설정을 다시 로드하여 현재 객체를 업데이트합니다."""
         if not SETTINGS_PATH.exists():
@@ -440,6 +460,10 @@ class Config:
             return config
         doc = tomlkit.parse(SETTINGS_PATH.read_text(encoding="utf-8"))
         config._apply_toml(doc)
+        if config._migrate_legacy_toml(doc):
+            SETTINGS_PATH.write_text(tomlkit.dumps(doc), encoding="utf-8")
+            config.save_setting()
+            return config
         # 업데이트로 새 설정 항목이 생겼다면 기본값을 채워 넣어 파일에서 바로 보이게 함
         missing = any(
             section not in doc or key not in doc[section]
