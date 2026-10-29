@@ -1,0 +1,20 @@
+.git
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+data
+settings.toml
+.env
+.env.bak
+memory/data
+soundboard
+output_temp
+unused
+scripts
+sqlite-tools
+개발 일지
+*.zip
+*.txt
+!requirements.txt

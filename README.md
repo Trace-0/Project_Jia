@@ -61,12 +61,21 @@ AI bot that can chat and converse on Discord
 
 # 1. 설치
 
+지아는 세 가지 방법으로 받을 수 있어요. 잘 모르겠다면 **1-2. 윈도우 포터블**을 추천해요.
+
+| 방법 | 이런 분께 추천 | 운영체제 |
+|---|---|---|
+| 1-2. 윈도우 포터블 (embedded Python) | 파이썬을 따로 설치하지 않고 압축만 풀어서 쓰고 싶은 분 | Windows |
+| 1-3. uv | 파이썬 개발 도구에 익숙하고, 소스를 직접 받아 실행하고 싶은 분 | Windows, Linux |
+| 1-4. Docker | 서버나 NAS에서 계속 켜두고 싶은 분 | Linux (NVIDIA GPU) |
+
 ### 1-1. 설치하기전에 필요한 것이 있어요.
 
 1. Ollama
 2. KSS기반 TTS 모델 (ESPnet에서 사용할 수 있는지 확인해야 해요.)
 3. 디스코드 봇 토큰
-4. CUDA Toolkit 12.6
+4. NVIDIA 그래픽 카드와 CUDA Toolkit 12.6 (Docker는 그래픽 드라이버와 NVIDIA Container Toolkit만 있으면 돼요)
+5. FFmpeg (배경 음악과 효과음 재생에 필요해요. Docker에는 이미 들어 있어요)
 
 ## 1-1-1. Ollama
 
@@ -87,18 +96,58 @@ ollama는 [여기](https://ollama.com/) 에서 다운로드 받을 수 있어요
 
 CUDA Toolkit은 [여기](https://developer.nvidia.com/cuda-toolkit-archive)에서 다운로드 받을 수 있어요.
 
-(Embedded Python 버전이 CUDA Toolkit 12.6 기준으로 라이브러리를 다운로드하기 때문이에요.)
+(PyTorch를 CUDA 12.6 빌드로 받기 때문이에요.)
 
-# 1-2. Embedded python 버전으로 받기
+## 1-1-5. FFmpeg
 
-1. [여기](https://github.com/Trace-0/Project_Jia/releases/tag/v1.1.2)에서 파일을 다운로드 받아요.
+[여기](https://ffmpeg.org/download.html)에서 받은 뒤 `ffmpeg.exe`가 있는 폴더를 PATH에 추가해주세요. 터미널에서 `ffmpeg -version`이 실행되면 준비된 거예요.
+
+# 1-2. 윈도우 포터블 (embedded Python)
+
+1. [여기](https://github.com/Trace-0/Project_Jia/releases/tag/v1.2.0)에서 `Project_Jia_V1.2.0_windows_portable.zip`을 다운로드 받아요.
 2. 받은 파일의 압축을 해제해주세요.
 3. TTS 모델을 파일 안으로 옮겨주세요.
-4. 'settings.toml' 파일을 열고 봇 토큰 등 설정을 입력해주세요. (파일이 없다면 한 번 실행하면 자동으로 생성돼요.)
-5. 'RUN_FIRST.bat' 파일을 실행해주세요.
-6. 'RUN_SECOND.bat' 파일을 실행해주세요. 관리자 권한을 요구하는 창이 나온다면 '예'를 선택해주세요. (ESPnet, pywin32의 문제로 TTS모델이 변경되면 관리자 권한이 필요합니다.)
+4. 'RUN_FIRST.bat' 파일을 실행해주세요. 필요한 라이브러리를 설치해요. (PyTorch 등 수 GB를 받으니 시간이 걸려요)
+5. 'RUN_SECOND.bat' 파일을 실행해주세요. 관리자 권한을 요구하는 창이 나온다면 '예'를 선택해주세요. (ESPnet, pywin32의 문제로 TTS모델이 변경되면 관리자 권한이 필요합니다.)
+6. 처음 실행하면 'settings.toml' 파일이 만들어져요. 봇 토큰과 TTS 모델 경로 등 설정을 입력하고 저장해주세요.
 7. (다음부터는 'start.bat' 파일로 실행할 수 있어요. 하지만, TTS 모델이 바뀐다면 'RUN_SECOND.bat' 파일로 한 번은 실행해야해요.)
 8. 이제 지아와 대화해보죠!
+
+> 설치되는 라이브러리 버전은 `constraints.txt`로 고정되어 있어요. 테스트한 버전 그대로 설치되니 직접 고치지 않는 것을 권장해요.
+
+# 1-3. uv로 실행하기
+
+[uv](https://docs.astral.sh/uv/getting-started/installation/)가 설치되어 있다면, 파이썬을 따로 설치하지 않아도 돼요. (uv가 Python 3.10을 알아서 받아요)
+
+```bash
+git clone https://github.com/Trace-0/Project_Jia.git
+cd Project_Jia
+uv sync
+uv run main.py
+```
+
+- 소스 대신 `Project_Jia_V1.2.0_uv.zip`을 받아 압축을 푼 폴더에서 `uv sync` → `uv run main.py`를 실행해도 같아요.
+- `uv.lock`에 테스트한 버전이 모두 고정되어 있어서 누가 설치해도 같은 환경이 만들어져요.
+- 처음 실행하면 `settings.toml`이 만들어지니, 봇 토큰과 TTS 모델 경로를 입력해주세요.
+
+> [!important]
+> Windows에서는 TTS 모델을 처음 불러올 때(모델을 바꿨을 때도) ESPnet이 심볼릭 링크를 만들어서 **관리자 권한**이 필요해요. 그때만 터미널을 관리자 권한으로 열고 `uv run main.py`를 실행하거나, Windows 설정에서 **개발자 모드**를 켜두면 돼요.
+
+# 1-4. Docker로 실행하기
+
+Linux 서버에서 NVIDIA GPU로 실행해요. [Docker](https://docs.docker.com/engine/install/)와 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)이 필요해요.
+
+```bash
+# 소스 폴더(또는 Project_Jia_V1.2.0_docker.zip을 푼 폴더)에서
+docker compose up -d --build
+docker compose logs -f jia
+```
+
+- 설정, 기억, 효과음, 모델 캐시는 모두 `./data` 폴더에 저장돼요. 컨테이너를 지우고 다시 만들어도 남아 있어요.
+- 처음 실행하면 `./data/settings.toml`이 만들어져요. 봇 토큰을 넣고 저장하면 돼요. (`JIA_BOT_TOKEN=토큰 docker compose up -d`처럼 처음 실행할 때 넣어도 돼요)
+- TTS 모델은 `./data/models`에 넣고, `[tts] model = "/app/data/models/모델이름.zip"`으로 적어주세요.
+- 기본으로 **이 컴퓨터에 설치된 Ollama**(`http://host.docker.internal:11434`)에 연결해요. Linux에서는 Ollama가 외부 접속을 받도록 `OLLAMA_HOST=0.0.0.0`으로 실행해주세요.
+- Ollama도 도커로 함께 띄우려면 `JIA_LLM_API_BASE=http://ollama:11434 docker compose --profile ollama up -d --build`로 실행해주세요.
 
 * * *
 
@@ -505,6 +554,7 @@ pywin32의 문제로 관리자 권한을 요구하는 문제
 43. [음성] 지아가 문장을 말한 뒤 다음 문장이 바로 치고 들어오던 문제를 고쳤습니다. TTS 문장 사이에 `[tts] sentence_pause_ms`/`comma_pause_ms`만큼 쉼을 두고, 말끝이 20ms씩 잘리던 문제도 함께 고쳤습니다.
 44. [음성] 지아가 말하는 도중 끊었을 때 소리를 0.1초 동안 줄여 나가며 멈춰 '틱' 소리를 없앴고, 끊는 순간 생성 중이던 문장이 뒤늦게 재생되던 문제를 고쳤습니다. TTS는 문장마다 FFmpeg 프로세스를 띄우지 않고 메모리에서 바로 재생해 중간에 끊기는 소리를 줄였습니다. 또한 실제로 어디까지 들렸는지(끝까지 들린 문장, 말하다 끊긴 문장)를 다음 LLM 호출에 알려줍니다.
 45. [음성] 마이크 잡음이 0.5초 이상 들어오면 사용자가 끼어든 것으로 보고 지아의 말을 끊던 문제를 고쳤습니다. 끼어들기로 판단하기 전에 VAD로 실제 말소리인지 확인하고, 잡음이면 계속 말합니다.
+46. 배포 형식을 세 가지로 늘렸습니다. 기존 윈도우 포터블(embedded Python)에 더해 uv(`pyproject.toml`, `uv.lock`)와 Docker(`Dockerfile`, `docker-compose.yml`)로도 실행할 수 있습니다. 모든 배포본이 같은 잠금 파일(`uv.lock`) 기준 버전으로 설치되며, ESPnet은 numpy 2를 지원하는 202511 버전으로 올렸습니다.
 
 ---
 
