@@ -302,6 +302,7 @@ threadpoolctl==3.6.0
 tiktoken==0.11.0
 tokenizers==0.22.2
 tomli==2.2.1
+tomlkit==0.15.0
 torch==2.7.1+cu128
 torch-complex==0.4.4
 torchaudio==2.7.1+cu128
@@ -334,5 +335,6 @@ win32_setctime==1.2.0
 wrapt==1.17.2
 xxhash==3.5.0
 yarl==1.23.0
+yt-dlp
 zipp==3.23.0
 zstandard==0.23.0

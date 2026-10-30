@@ -1,0 +1,42 @@
+# Project Jia (도커)
+#   처음 실행:  docker compose up -d --build
+#   로그 보기:  docker compose logs -f jia
+# 설정은 ./data/settings.toml (처음 실행하면 자동 생성) 을 고친 뒤 저장하면 바로 반영돼요.
+services:
+  jia:
+    build: .
+    image: project-jia:1.2.0
+    container_name: project-jia
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      # 처음 실행해 settings.toml이 만들어질 때 들어갈 값입니다. (그 뒤에는 settings.toml에서 바꿔주세요)
+      # 컴퓨터에 설치된 Ollama를 쓰는 기본값입니다. 아래 ollama 서비스를 쓰면 http://ollama:11434 로 바꿔주세요.
+      JIA_LLM_API_BASE: ${JIA_LLM_API_BASE:-http://host.docker.internal:11434}
+      JIA_BOT_TOKEN: ${JIA_BOT_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Ollama도 도커로 함께 띄우고 싶을 때만 사용: docker compose --profile ollama up -d --build
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    container_name: project-jia-ollama
+    restart: unless-stopped
+    volumes:
+      - ./data/ollama:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

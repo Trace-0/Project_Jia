@@ -1,15 +1,22 @@
 import asyncio
+import io
 import threading
 import queue
+import time
 import uuid
+import discord
+import numpy as np
 from discord_interface.vad import get_speech_timestamps_from_array
 from discord_interface.faster_whisper_output import transcribe_sync
 from discord_interface.espnet_tts_output import generate_tts
+from discord_interface.smart_turn import predict_turn_complete
 from LLM.langchain_llm import astream_call_response, generate_response
+from config.config_manager import config
 import logging
 import torch
 import torchaudio
 import re
+from discord_interface.youtube_music import MusicTrack
 
 bot_instance = None
 
@@ -19,23 +26,212 @@ def set_bot(bot):
     global bot_instance
     bot_instance = bot
 
-def tts_and_play(text: str, guild: int, task_id: str):
+def _queue_tts_audio(guild: int, task_id: str, audio_data, cancel_event: threading.Event | None):
+    """TTS 음성을 재생 큐에 넣도록 봇 루프에 예약합니다. 그 사이 재생이 끊겼다면 넣지 않습니다."""
+    def add():
+        # 끊김 처리(_interrupt_playback)도 봇 루프에서 실행되므로, 여기서 확인하면 끊긴 뒤 들어오는 문장을 확실히 막을 수 있음
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        bot_instance.audio_stream_manager.add_to_queue(guild, task_id, audio_data)
+    bot_instance.loop.call_soon_threadsafe(add)
+
+def tts_and_play(text: str, guild: int, task_id: str, cancel_event: threading.Event | None = None):
     """TTS를 생성하고 디스코드 봇에 스트림 재생을 요청하는 함수"""
     if bot_instance and bot_instance.audio_stream_manager:
         try:
             audio_data = generate_tts(text)
+            if cancel_event is not None and cancel_event.is_set():
+                return  # 생성하는 동안 사용자가 말을 끊음
+            audio_data._jia_text = text  # 재생이 끊겼을 때 어디까지 들렸는지 기록하는 데 사용
             if bot_instance.loop and not bot_instance.loop.is_closed():
                 try:
-                    bot_instance.loop.call_soon_threadsafe(
-                        bot_instance.audio_stream_manager.add_to_queue,
-                        guild, task_id, audio_data
-                    )
+                    _queue_tts_audio(guild, task_id, audio_data, cancel_event)
                 except RuntimeError as e:
                     logging.error(f"[Pipeline] 이벤트 루프가 닫혀 큐에 추가할 수 없습니다: {e}")
             else:
                 logging.error(f"[Pipeline] 봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다.")
         except Exception as e:
             logging.error(f"[Pipeline] TTS 생성 및 재생 작업 큐에 추가 중 오류 발생: {e}")
+
+def play_sound_file(guild: int, file_path: str, volume: float = 1.0) -> tuple[bool, str]:
+    """사운드보드 효과음 파일을 봇 오디오 재생 큐에 추가합니다. (성공 여부, 메시지)를 반환합니다.
+
+    파일 경로 검증은 호출하는 쪽(LLM/langchain_tools/soundboard.py)에서 수행합니다.
+    경로(str) 대신 파일 내용을 BytesIO로 읽어 큐에 넣는 이유: AudioStreamManager.after_play가
+    문자열 경로로 받은 오디오를 임시 TTS 파일로 간주해 재생 후 삭제하기 때문입니다.
+    """
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    guild_obj = bot_instance.get_guild(guild)
+    voice_client = guild_obj.voice_client if guild_obj else None
+    if not voice_client or not voice_client.is_connected():
+        return False, "지아가 음성 채널에 접속해 있지 않습니다."
+    try:
+        with open(file_path, "rb") as f:
+            audio_buffer = io.BytesIO(f.read())
+            audio_buffer._jia_volume = max(0.0, min(1.0, float(volume)))
+    except OSError as e:
+        logging.error(f"[Pipeline] 효과음 파일을 읽지 못했어요: {e}")
+        return False, f"효과음 파일을 읽을 수 없습니다: {e}"
+    except (TypeError, ValueError):
+        return False, "효과음 볼륨은 0.0부터 1.0 사이 숫자로 설정해야 합니다."
+    if not bot_instance.loop or bot_instance.loop.is_closed():
+        return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+    try:
+        bot_instance.loop.call_soon_threadsafe(
+            bot_instance.audio_stream_manager.add_to_queue,
+            guild, str(uuid.uuid4()), audio_buffer
+        )
+    except RuntimeError as e:
+        logging.error(f"[Pipeline] 이벤트 루프가 닫혀 효과음을 큐에 추가할 수 없습니다: {e}")
+        return False, "봇의 이벤트 루프가 닫혀 재생할 수 없습니다."
+    return True, "효과음을 재생 큐에 추가했습니다."
+
+
+def play_music(guild: int, tracks: list[MusicTrack]) -> tuple[bool, str]:
+    """유튜브 음악 큐를 새로 재생합니다. TTS/효과음이 들어오면 믹서에서 자동으로 볼륨을 낮춥니다."""
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    guild_obj = bot_instance.get_guild(guild)
+    voice_client = guild_obj.voice_client if guild_obj else None
+    if not voice_client or not voice_client.is_connected():
+        return False, "지아가 음성 채널에 접속해 있지 않습니다."
+    return bot_instance.audio_stream_manager.start_music_tracks(guild, tracks)
+
+
+def queue_music(guild: int, tracks: list[MusicTrack]) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    guild_obj = bot_instance.get_guild(guild)
+    voice_client = guild_obj.voice_client if guild_obj else None
+    if not voice_client or not voice_client.is_connected():
+        return False, "지아가 음성 채널에 접속해 있지 않습니다."
+    return bot_instance.audio_stream_manager.queue_music_tracks(guild, tracks)
+
+
+def stop_music(guild: int) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.stop_music(guild)
+
+
+def pause_music(guild: int) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.pause_music(guild)
+
+
+def resume_music(guild: int) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.resume_music(guild)
+
+
+def set_music_volume(guild: int, volume: float) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.set_music_volume(guild, volume)
+
+
+def skip_music(guild: int) -> tuple[bool, str]:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return False, "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.skip_music(guild)
+
+
+def music_status(guild: int) -> str:
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return "봇 인스턴스 또는 오디오 스트림 매니저가 없습니다."
+    return bot_instance.audio_stream_manager.music_status(guild)
+
+
+def stop_foreground_audio(guild: int) -> int:
+    """TTS/효과음 foreground 큐만 비웁니다. 배경 음악은 유지합니다."""
+    if not bot_instance or not bot_instance.audio_stream_manager:
+        return 0
+    return bot_instance.audio_stream_manager.stop_foreground(guild)
+
+# 길드별로 마지막 텍스트 대화(/jia, autotalk)가 오간 채널. 생성된 이미지를 보낼 곳을 정할 때 사용합니다.
+_active_text_channels: dict[int, int] = {}
+
+def set_active_text_channel(guild: int, channel_id: int):
+    """텍스트 대화가 시작된 채널을 기록합니다. (discordBot의 TextGen에서 호출)"""
+    _active_text_channels[guild] = channel_id
+
+def _resolve_send_channel(guild: int, prefer_voice_channel: bool = False):
+    """이미지/안내 메시지를 보낼 채널을 찾습니다.
+
+    prefer_voice_channel이 True면 접속 중인 음성 채널의 채팅에 우선 전송하고,
+    아니면 마지막 텍스트 대화 채널 -> 음성 채널 채팅 순서로 시도합니다.
+    """
+    guild_obj = bot_instance.get_guild(guild)
+    voice_client = guild_obj.voice_client if guild_obj else None
+    voice_channel = getattr(voice_client, "channel", None) if (voice_client and voice_client.is_connected()) else None
+    text_channel = bot_instance.get_channel(_active_text_channels.get(guild, 0))
+    candidates = [voice_channel, text_channel] if prefer_voice_channel else [text_channel, voice_channel]
+    return next((c for c in candidates if c is not None and hasattr(c, "send")), None)
+
+def send_placeholder_message(guild: int, text: str, prefer_voice_channel: bool = False) -> tuple[discord.Message | None, str]:
+    """안내 문구를 채널에 먼저 보내고, 나중에 수정할 수 있도록 보낸 메시지 객체를 반환합니다.
+
+    (메시지 객체 또는 None, 설명)을 반환합니다. 봇 스레드가 아닌 곳에서 호출해야 합니다.
+    """
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return None, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+    channel = _resolve_send_channel(guild, prefer_voice_channel)
+    if channel is None:
+        return None, "메시지를 보낼 채널을 찾지 못했습니다."
+    try:
+        message = asyncio.run_coroutine_threadsafe(channel.send(text), bot_instance.loop).result(timeout=30)
+    except Exception as e:
+        logging.error(f"[Pipeline] 안내 메시지 전송 중 오류 발생: {e}")
+        return None, f"안내 메시지 전송 중 오류가 발생했습니다: {e}"
+    return message, "안내 메시지를 보냈습니다."
+
+def edit_message_attach_image(message: discord.Message, image_bytes: bytes, filename: str, content: str = "") -> tuple[bool, str]:
+    """보내둔 메시지를 수정해 생성된 이미지를 첨부합니다. (성공 여부, 메시지)를 반환합니다."""
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+    try:
+        file = discord.File(io.BytesIO(image_bytes), filename=filename)
+        asyncio.run_coroutine_threadsafe(
+            message.edit(content=content, attachments=[file]), bot_instance.loop
+        ).result(timeout=30)
+    except Exception as e:
+        logging.error(f"[Pipeline] 메시지에 이미지를 첨부하는 중 오류 발생: {e}")
+        return False, f"메시지에 이미지를 첨부하는 중 오류가 발생했습니다: {e}"
+    logging.info(f"[Pipeline] 안내 메시지를 수정해 생성된 이미지를 올렸어요. (guild={message.guild.id if message.guild else '?'})")
+    return True, "이미지를 채널에 올렸습니다."
+
+def edit_message_text(message: discord.Message, content: str):
+    """보내둔 메시지의 내용만 수정합니다. (실패 안내 등에 사용)"""
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(message.edit(content=content), bot_instance.loop).result(timeout=30)
+    except Exception as e:
+        logging.error(f"[Pipeline] 메시지 수정 중 오류 발생: {e}")
+
+def send_image_to_guild(guild: int, image_bytes: bytes, filename: str, caption: str = "", prefer_voice_channel: bool = False) -> tuple[bool, str]:
+    """생성된 이미지를 길드의 적절한 채널에 새 메시지로 전송합니다. (성공 여부, 메시지)를 반환합니다.
+
+    안내 메시지 수정(edit_message_attach_image)이 실패했을 때의 대체 경로로도 사용합니다.
+    """
+    if not bot_instance or not bot_instance.loop or bot_instance.loop.is_closed():
+        return False, "봇의 이벤트 루프가 닫혔거나 사용할 수 없습니다."
+    channel = _resolve_send_channel(guild, prefer_voice_channel)
+    if channel is None:
+        return False, "이미지를 보낼 채널을 찾지 못했습니다."
+    try:
+        file = discord.File(io.BytesIO(image_bytes), filename=filename)
+        asyncio.run_coroutine_threadsafe(
+            channel.send(content=caption or None, file=file), bot_instance.loop
+        ).result(timeout=30)
+    except Exception as e:
+        logging.error(f"[Pipeline] 이미지 전송 중 오류 발생: {e}")
+        return False, f"이미지 전송 중 오류가 발생했습니다: {e}"
+    logging.info(f"[Pipeline] 생성된 이미지를 채널({channel})에 올렸어요. (guild={guild})")
+    return True, "이미지를 채널에 올렸습니다."
 
 def send_text_result(task_id: str, text: str):
     """디스코드 봇에 텍스트 결과 전송을 요청하는 함수"""
@@ -120,11 +316,11 @@ def tts_text_and_queue(text: str, guild: int, task_id: str):
             except Exception as e:
                 logging.error(f"[Pipeline] 문장별 TTS 생성 실패: {e}")
                 continue
+            if cancel_event.is_set():
+                break
+            buf._jia_text = s
             try:
-                bot_instance.loop.call_soon_threadsafe(
-                    bot_instance.audio_stream_manager.add_to_queue,
-                    guild, task_id, buf
-                )
+                _queue_tts_audio(guild, task_id, buf, cancel_event)
             except RuntimeError as e:
                 logging.error(f"[Pipeline] 이벤트 루프가 닫혀 큐에 추가할 수 없습니다: {e}")
     except Exception as e:
@@ -132,21 +328,37 @@ def tts_text_and_queue(text: str, guild: int, task_id: str):
     finally:
         _unregister_tts_cancel(guild, cancel_event)
 
-def _transcribe_48k(user: str, audio_data_48k) -> str:
-    """48kHz 오디오를 리샘플링하고 VAD로 발화 구간을 찾아 텍스트로 변환합니다. (블로킹 작업)"""
+def contains_speech_48k(audio_data_48k) -> bool:
+    """48kHz 모노 음성에 실제 말소리가 있는지 VAD로 확인합니다. (블로킹 작업, 끼어들기 확인용)
+
+    확인에 실패하면 예전처럼 끼어든 것으로 처리하도록 True를 반환합니다.
+    """
+    try:
+        audio_16k = resampler_48_to_16(torch.from_numpy(audio_data_48k)).numpy()
+        speech = get_speech_timestamps_from_array(audio_16k)
+        return speech is None or bool(speech)
+    except Exception as e:
+        logging.error(f"[Pipeline] 끼어들기 발화 확인 중 오류 발생: {e}")
+        return True
+
+def _transcribe_48k(user: str, audio_data_48k) -> tuple[str, "np.ndarray"]:
+    """48kHz 오디오를 리샘플링하고 VAD로 발화 구간을 찾아 텍스트로 변환합니다. (블로킹 작업)
+
+    문장 끝 판정에도 쓸 수 있도록 (텍스트, 16kHz 오디오)를 함께 반환합니다.
+    """
     audio_tensor_48k = torch.from_numpy(audio_data_48k)
     audio_data_16k = resampler_48_to_16(audio_tensor_48k).numpy()
 
     speech_timestamps = get_speech_timestamps_from_array(audio_data_16k)
     if not speech_timestamps:
-        return ""
+        return "", audio_data_16k
 
     # 받은 음성 패킷에 대한 VAD 결과가 있다면 마지막 발화 구간 끝까지 잘라서 변환
     end_idx = speech_timestamps[-1]['end']
     logging.info(f"[{user}] 음성을 텍스트로 변환하고 있어요.")
     text = transcribe_sync(audio_data_16k[:end_idx])
     logging.info(f"[{user}] 텍스트 변환 결과가 나왔어요. -> {text}")
-    return text
+    return text, audio_data_16k
 
 def _tts_worker(sentence_queue: queue.Queue, guild: int, stream_task_id: str, cancel_event: threading.Event):
     """문장을 받은 순서대로 TTS 생성 후 재생 큐에 추가하는 워커 (응답 1건당 1개)"""
@@ -154,12 +366,154 @@ def _tts_worker(sentence_queue: queue.Queue, guild: int, stream_task_id: str, ca
         sentence = sentence_queue.get()
         if sentence is None or cancel_event.is_set():  # 종료/취소 신호
             break
-        tts_and_play(sentence, guild, stream_task_id)
+        tts_and_play(sentence, guild, stream_task_id, cancel_event)
+
+# === 다인 대화 배칭 ===
+# 발화를 길드별로 모아두고, 길드당 하나의 대화 워커가 배치 단위로 LLM 응답을 생성합니다.
+# 지아가 응답을 생성/재생하는 동안 들어온 발화는 다음 배치로 묶여 한 번의 호출로 처리됩니다.
+# (아래 자료구조는 모두 봇 이벤트 루프에서만 접근하므로 별도 잠금이 필요 없습니다)
+_pending_utterances: dict[int, list[tuple[str, str]]] = {}
+_convo_tasks: dict[int, asyncio.Task] = {}
+
+# === 발화 이어짐 대기 (turn grace) ===
+# 발화 끝은 "패킷 0.1초 끊김"으로 판단하므로 숨 쉬는 사이에도 문장이 쪼개집니다.
+# 대화 워커는 마지막 음성 패킷 이후 voice_turn_grace_sec 동안 조용하고, 변환 중인 발화도 없을 때 응답을 시작합니다.
+TURN_MAX_WAIT_SEC = 8.0  # 누군가 계속 말해도 이 시간이 지나면 응답 (마이크가 계속 열린 사용자 대비)
+# 길드별 마지막 음성 패킷 시각. 수신 스레드가 패킷마다 기록하는 유일한 값이라 float 대입만 합니다.
+_last_voice_packet: dict[int, float] = {}
+_inflight_transcriptions: dict[int, int] = {}
+# 같은 사용자의 쪼개진 발화가 변환 완료 순서와 관계없이 말한 순서대로 쌓이도록 사용자별로 변환을 직렬화
+_transcribe_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+# === 문장 끝 판정 (Smart Turn) ===
+# voice_smart_turn이 켜져 있으면 조각마다 "말이 끝났는지"를 판정해 대기 시간을 바꿉니다.
+#   끝남 -> SMART_TURN_COMPLETE_WAIT_SEC만 기다림 / 안 끝남 -> voice_smart_turn_incomplete_wait_sec까지 기다림
+# 판정할 수 없으면(모델 로드 실패 등) voice_turn_grace_sec 고정 대기로 처리하고, TURN_MAX_WAIT_SEC 상한은 항상 적용됩니다.
+SMART_TURN_COMPLETE_WAIT_SEC = 0.2
+SMART_TURN_THRESHOLD = 0.5
+TURN_AUDIO_MAX_SAMPLES = 8 * 16000  # 모델이 보는 최대 길이 (16kHz 8초)
+# 모델이 "안 끝남"이라도 Whisper가 받아 적은 문장이 . ? ! 로 끝나면 끝난 문장일 가능성이 높아 기본 대기만 함 (말줄임표 제외)
+SENTENCE_END_MARKS = (".", "?", "!", "。", "？", "！")
+# 이번 턴 동안 사용자별로 이어 붙인 16kHz 음성(최근 8초)과 마지막 판정 (봇 이벤트 루프에서만 접근)
+#   "complete" = 모델이 끝남, "sentence_end" = 모델은 안 끝남이지만 문장부호로 끝남, "incomplete", None = 판정 불가
+_turn_audio: dict[tuple[int, str], "np.ndarray"] = {}
+_turn_verdict: dict[tuple[int, str], str | None] = {}
+
+def note_voice_packet(guild: int):
+    """사용자 음성 패킷이 들어왔음을 기록합니다. (음성 수신 스레드에서 호출)"""
+    _last_voice_packet[guild] = time.monotonic()
+
+# 지아의 음성 재생이 사용자 발화로 중단(barge-in)된 길드 표시.
+# 다음 LLM 호출에 "직전 응답이 끊겼다"는 안내를 함께 전달한 뒤 해제됩니다.
+# 값은 AudioStreamManager가 기록한 '어디까지 들렸는지' 정보 ({"heard", "cut", "cut_progress", "unsaid"}, 없으면 빈 dict)
+_interrupted_guilds: dict[int, dict] = {}
+
+# === 먼저 말 걸기 (proactive) ===
+# 음성 채널이 proactive_idle_sec 동안 조용하면 지아가 먼저 말을 걸어볼지 LLM에 물어봅니다.
+# 발화 큐에 센티널을 넣어 기존 대화 워커로 직렬 처리되므로 실제 발화와 충돌하지 않습니다.
+PROACTIVE_SENTINEL = "__JIA_PROACTIVE__"
+_proactive_tasks: dict[int, asyncio.Task] = {}
+_last_activity: dict[int, float] = {}
+# 지아가 먼저 말을 건 뒤 아직 아무도 대답하지 않은 길드. (사용자 발화가 올 때까지 다시 말 걸지 않음)
+_proactive_waiting: set[int] = set()
+
+def start_proactive_monitor(guild: int):
+    """길드의 음성 채널 유휴 감시를 시작합니다. (봇 이벤트 루프에서 호출)"""
+    _last_activity[guild] = time.monotonic()
+    _proactive_waiting.discard(guild)
+    task = _proactive_tasks.get(guild)
+    if task is None or task.done():
+        _proactive_tasks[guild] = asyncio.create_task(_proactive_monitor(guild))
+
+def stop_proactive_monitor(guild: int):
+    """길드의 음성 채널 유휴 감시를 중단합니다."""
+    task = _proactive_tasks.pop(guild, None)
+    if task and not task.done():
+        task.cancel()
+    _last_activity.pop(guild, None)
+    _proactive_waiting.discard(guild)
+
+async def _proactive_monitor(guild: int):
+    """주기적으로 유휴 시간을 확인해, 충분히 조용하면 먼저 말 걸기 시도를 발화 큐에 넣는 워커"""
+    try:
+        while True:
+            await asyncio.sleep(5)
+            g = bot_instance.get_guild(guild) if bot_instance else None
+            voice_client = g.voice_client if g else None
+            if not voice_client or not voice_client.is_connected():
+                break  # 음성 연결이 끊기면 감시 종료
+            idle_sec = config.proactive_idle_sec
+            if idle_sec <= 0 or guild in _proactive_waiting:
+                continue
+            # 채널에 사람이 없으면 타이머만 초기화 (들어오자마자 말 걸지 않도록)
+            if not _get_voice_participants(guild):
+                _last_activity[guild] = time.monotonic()
+                continue
+            # 응답 생성/재생 중이거나 처리 대기 발화가 있으면 유휴 상태가 아님
+            manager = bot_instance.audio_stream_manager if bot_instance else None
+            busy = bool(_pending_utterances.get(guild)) or (
+                manager and (manager.playing.get(guild) or any(manager.streams.get(guild, {}).values()))
+            )
+            if busy:
+                continue
+            if time.monotonic() - _last_activity.get(guild, time.monotonic()) < idle_sec:
+                continue
+            # 먼저 말 걸기 시도: 센티널 발화를 큐에 넣어 기존 워커로 직렬 처리
+            logging.info(f"[Pipeline:Proactive] 길드({guild})가 {idle_sec}초 동안 조용해서 먼저 말을 걸어볼게요.")
+            _proactive_waiting.add(guild)
+            _last_activity[guild] = time.monotonic()
+            _pending_utterances.setdefault(guild, []).append((PROACTIVE_SENTINEL, ""))
+            task = _convo_tasks.get(guild)
+            if task is None or task.done():
+                _convo_tasks[guild] = asyncio.create_task(_conversation_worker(guild))
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logging.error(f"[Pipeline:Proactive] 유휴 감시 중 오류 발생: {e}")
+    finally:
+        _proactive_tasks.pop(guild, None)
+
+def mark_playback_interrupted(guild: int):
+    """재생이 사용자 발화로 중단되었음을 기록합니다. (stop_foreground_audio 직후 봇 루프에서 호출)"""
+    manager = bot_instance.audio_stream_manager if bot_instance else None
+    report = manager.pop_interruption_report(guild) if manager else None
+    _interrupted_guilds[guild] = report or {}
+    if report:
+        logging.info(f"[Pipeline] 지아의 말이 끊겼어요. 들린 문장 {len(report['heard'])}개, 끊긴 문장: {report['cut']} ({report['cut_progress']:.0%})")
+
+def _pop_playback_interrupted(guild: int) -> dict | None:
+    return _interrupted_guilds.pop(guild, None)
+
+def clear_pending_utterances(guild: int) -> int:
+    """아직 처리되지 않은 대기 발화와 인터럽트 표시를 비우고, 비운 발화 수를 반환합니다. (/jiastop, /jialeave용)"""
+    _interrupted_guilds.pop(guild, None)
+    pending = _pending_utterances.get(guild)
+    count = len(pending) if pending else 0
+    if pending:
+        pending.clear()
+    return count
 
 async def process_audio(user, guild, audio_data_48k, only_hear: bool = False, textchan_id: int = None):
+    if not only_hear:
+        _inflight_transcriptions[guild] = _inflight_transcriptions.get(guild, 0) + 1
     try:
         # 블로킹 작업(리샘플링/VAD/Whisper)이 봇 이벤트 루프를 멈추지 않도록 스레드에서 실행
-        text = await asyncio.to_thread(_transcribe_48k, user, audio_data_48k)
+        key = (guild, user)
+        lock = _transcribe_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            text, audio_16k = await asyncio.to_thread(_transcribe_48k, user, audio_data_48k)
+            if text and not only_hear and config.voice_smart_turn:
+                # 같은 턴에 쪼개져 들어온 음성을 이어 붙여 "지금까지 말한 것"이 끝났는지 판정
+                previous = _turn_audio.get(key)
+                turn_audio = audio_16k if previous is None else np.concatenate([previous, audio_16k])
+                turn_audio = turn_audio[-TURN_AUDIO_MAX_SAMPLES:]
+                _turn_audio[key] = turn_audio
+                prob = await asyncio.to_thread(predict_turn_complete, turn_audio)
+                verdict = _turn_verdict_for(prob, text)
+                _turn_verdict[key] = verdict
+                if verdict is not None:
+                    label = {"complete": "끝남", "sentence_end": "안 끝남 → 문장부호로 끝나서 기본 대기", "incomplete": "안 끝남"}[verdict]
+                    logging.info(f"[SmartTurn] [{user}] 문장 끝 판정: {label} ({prob:.2f}) -> {text.strip()[-20:]}")
         if not text:
             return
 
@@ -171,25 +525,159 @@ async def process_audio(user, guild, audio_data_48k, only_hear: bool = False, te
                 logging.warning(f"[Pipeline] 텍스트 채널이 지정되지 않아 변환 결과를 전달할 곳이 없습니다.")
             return
 
-        # 같은 응답의 문장들이 순서대로 재생되도록 단일 워커가 순서대로 TTS 생성
-        stream_task_id = str(uuid.uuid4())
-        sentence_queue: queue.Queue = queue.Queue()
-        cancel_event = threading.Event()
-        _register_tts_cancel(guild, cancel_event, sentence_queue)
-        worker = threading.Thread(target=_tts_worker, args=(sentence_queue, guild, stream_task_id, cancel_event), daemon=True)
-        worker.start()
-        try:
-            async for sentence in astream_call_response(user, guild, text):
-                # 취소돼도 응답 생성은 끝까지 진행해 대화 기록은 보존하고, 재생만 건너뜀
-                if sentence and not cancel_event.is_set():
-                    sentence_queue.put(sentence)
-        except Exception as e:
-            logging.error(f"[Pipeline] TTS 및 재생 중 오류 발생: {e}")
-        finally:
-            sentence_queue.put(None)  # 워커 종료 신호
-            _unregister_tts_cancel(guild, cancel_event, sentence_queue)
+        # 사용자 발화가 들어왔으니 유휴 타이머를 초기화하고, 먼저 말 걸기 대기 상태를 해제
+        _last_activity[guild] = time.monotonic()
+        _proactive_waiting.discard(guild)
+
+        # 발화를 길드별 대기열에 쌓고, 대화 워커가 없으면 새로 시작
+        _pending_utterances.setdefault(guild, []).append((user, text))
+        task = _convo_tasks.get(guild)
+        if task is None or task.done():
+            _convo_tasks[guild] = asyncio.create_task(_conversation_worker(guild))
     except Exception as e:
         logging.error(f"[Pipeline] 오디오 처리 중 오류 발생: {e}")
+    finally:
+        if not only_hear:
+            _inflight_transcriptions[guild] = max(0, _inflight_transcriptions.get(guild, 0) - 1)
+
+def _turn_verdict_for(prob: float | None, text: str) -> str | None:
+    """문장 끝 모델 확률과 받아 적은 문장을 함께 보고 판정합니다."""
+    if prob is None:
+        return None
+    if prob >= SMART_TURN_THRESHOLD:
+        return "complete"
+    stripped = text.rstrip()
+    if stripped.endswith(SENTENCE_END_MARKS) and not stripped.endswith(("..", "…")):
+        return "sentence_end"
+    return "incomplete"
+
+def _required_quiet_sec(guild: int) -> float:
+    """대기 중인 발화의 문장 끝 판정에 따라 응답 전에 필요한 무음 시간을 정합니다."""
+    grace = config.voice_turn_grace_sec
+    if not config.voice_smart_turn:
+        return grace
+    speakers = {speaker for speaker, _ in _pending_utterances.get(guild, ()) if speaker != PROACTIVE_SENTINEL}
+    verdicts = [_turn_verdict.get((guild, speaker)) for speaker in speakers]
+    if not verdicts or any(v is None for v in verdicts):
+        return grace  # 판정할 수 없는 발화가 있으면 고정 대기
+    if "incomplete" in verdicts:
+        return max(grace, config.voice_smart_turn_incomplete_wait_sec)
+    if "sentence_end" in verdicts:
+        return grace
+    return SMART_TURN_COMPLETE_WAIT_SEC
+
+async def _wait_for_turn_end(guild: int):
+    """사용자가 말을 이어가는 중이거나 변환 중인 발화가 있으면 응답을 잠시 미룹니다.
+
+    문장 끝 판정이 틀려도 TURN_MAX_WAIT_SEC가 지나면 반드시 빠져나옵니다.
+    """
+    if config.voice_turn_grace_sec <= 0 and not config.voice_smart_turn:
+        return
+    started = time.monotonic()
+    deadline = started + TURN_MAX_WAIT_SEC
+    while time.monotonic() < deadline:
+        quiet_sec = time.monotonic() - _last_voice_packet.get(guild, 0.0)
+        # 판정은 조각이 들어올 때마다 바뀔 수 있으므로 매번 다시 계산
+        if quiet_sec >= _required_quiet_sec(guild) and not _inflight_transcriptions.get(guild):
+            return
+        await asyncio.sleep(0.05)
+    logging.info(f"[Pipeline] 길드({guild})에서 {TURN_MAX_WAIT_SEC:.0f}초 동안 말이 이어져서 기다리지 않고 응답할게요.")
+
+def _merge_consecutive_utterances(utterances: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """같은 사람이 연달아 말한 조각을 한 발화로 합칩니다."""
+    merged: list[tuple[str, str]] = []
+    for speaker, text in utterances:
+        if merged and merged[-1][0] == speaker and speaker != PROACTIVE_SENTINEL:
+            merged[-1] = (speaker, f"{merged[-1][1].rstrip()} {text.strip()}")
+        else:
+            merged.append((speaker, text))
+    return merged
+
+async def _conversation_worker(guild: int):
+    """모인 발화를 배치 단위로 처리하는 길드별 단일 워커 (LLM 호출/재생 직렬화)"""
+    try:
+        while True:
+            if not _pending_utterances.get(guild):
+                break
+            # 말이 이어지는 중이면 기다렸다가, 그 사이 쌓인 조각까지 한 배치로 처리
+            await _wait_for_turn_end(guild)
+            utterances = _pending_utterances.get(guild)
+            if not utterances:  # 기다리는 동안 /jiastop 등으로 비워진 경우
+                break
+            _pending_utterances[guild] = []
+            # 이번 턴이 끝났으니 다음 판정은 새 음성부터 시작
+            for speaker, _ in utterances:
+                _turn_audio.pop((guild, speaker), None)
+                _turn_verdict.pop((guild, speaker), None)
+            await _respond_to_batch(guild, _merge_consecutive_utterances(utterances))
+            # 재생이 끝날 때까지 기다리는 동안 들어온 발화는 다음 배치로 묶임
+            await _wait_for_playback(guild)
+            # 지아의 발화가 끝난 시점부터 유휴 시간을 다시 계산
+            _last_activity[guild] = time.monotonic()
+    except Exception as e:
+        logging.error(f"[Pipeline] 대화 워커 처리 중 오류 발생: {e}")
+
+def _get_voice_participants(guild: int) -> list[str]:
+    """봇이 접속한 음성 채널에 함께 있는 사용자(봇 제외) 이름 목록을 반환합니다."""
+    try:
+        g = bot_instance.get_guild(guild) if bot_instance else None
+        voice_client = g.voice_client if g else None
+        channel = getattr(voice_client, "channel", None)
+        if not channel:
+            return []
+        return [m.name for m in channel.members if not m.bot]
+    except Exception as e:
+        logging.warning(f"[Pipeline] 음성 채널 참가자 목록 조회 실패: {e}")
+        return []
+
+async def _respond_to_batch(guild: int, utterances: list[tuple[str, str]]):
+    """발화 배치 하나에 대해 LLM 응답을 스트리밍하며 TTS 재생 큐에 추가합니다."""
+    # 먼저 말 걸기 센티널 분리: 실제 발화가 함께 들어왔다면 일반 응답을 우선함
+    real_utterances = [u for u in utterances if u[0] != PROACTIVE_SENTINEL]
+    proactive = (len(real_utterances) == 0) and (len(utterances) > 0) and utterances[0][0] == PROACTIVE_SENTINEL
+    if not real_utterances and not proactive:
+        return
+    # 직전 응답 재생이 사용자 발화로 중단됐다면 이번 호출에서 LLM에 알림
+    interrupted = _pop_playback_interrupted(guild)
+    # 현재 음성 채널 참가자 목록 (LLM이 누구에게 하는 말인지 판단할 참고 자료)
+    participants = _get_voice_participants(guild)
+    # 같은 응답의 문장들이 순서대로 재생되도록 단일 워커가 순서대로 TTS 생성
+    stream_task_id = str(uuid.uuid4())
+    sentence_queue: queue.Queue = queue.Queue()
+    cancel_event = threading.Event()
+    _register_tts_cancel(guild, cancel_event, sentence_queue)
+    worker = threading.Thread(target=_tts_worker, args=(sentence_queue, guild, stream_task_id, cancel_event), daemon=True)
+    worker.start()
+    spoken_sentences = []
+    try:
+        async for sentence in astream_call_response(guild, real_utterances, interrupted=interrupted, participants=participants, proactive=proactive):
+            # 취소돼도 응답 생성은 끝까지 진행해 대화 기록은 보존하고, 재생만 건너뜀
+            if sentence and not cancel_event.is_set():
+                spoken_sentences.append(sentence)
+                sentence_queue.put(sentence)
+    except Exception as e:
+        logging.error(f"[Pipeline] TTS 및 재생 중 오류 발생: {e}")
+    finally:
+        sentence_queue.put(None)  # 워커 종료 신호
+        # 이번 응답의 TTS 생성이 모두 끝날 때까지 대기 (다음 배치 응답과 재생 순서가 섞이지 않게)
+        # 생성이 끝나기 전까지는 /jiastop 취소 신호를 받을 수 있도록 등록을 유지
+        await asyncio.to_thread(worker.join)
+        _unregister_tts_cancel(guild, cancel_event, sentence_queue)
+        if real_utterances and spoken_sentences and not cancel_event.is_set():
+            try:
+                from LLM.langchain_tools.soundboard import maybe_play_auto_reaction
+                transcript = "\n".join(f"{speaker}: {text}" for speaker, text in real_utterances)
+                maybe_play_auto_reaction(guild, f"{transcript}\n지아: {' '.join(spoken_sentences)}")
+            except Exception as e:
+                logging.error(f"[Pipeline] 사운드보드 자동 반응 처리 중 오류 발생: {e}")
+
+async def _wait_for_playback(guild: int):
+    """이 길드의 오디오 재생이 모두 끝날 때까지 대기합니다."""
+    manager = bot_instance.audio_stream_manager if bot_instance else None
+    if not manager:
+        return
+    while manager.playing.get(guild) or any(manager.streams.get(guild, {}).values()):
+        await asyncio.sleep(0.2)
 
 def run_audio_task(user, guild, audio_data_48k, only_hear: bool = False, textchan_id: int = None):
     if bot_instance and bot_instance.loop and not bot_instance.loop.is_closed():
@@ -200,6 +688,12 @@ def run_audio_task(user, guild, audio_data_48k, only_hear: bool = False, textcha
 def process_text(task_id, user, guild, text):
     result_text = generate_response(user, guild, text)
     send_text_result(task_id, result_text)
+    if result_text:
+        try:
+            from LLM.langchain_tools.soundboard import maybe_play_auto_reaction
+            maybe_play_auto_reaction(guild, f"{user}: {text}\n지아: {result_text}")
+        except Exception as e:
+            logging.error(f"[Pipeline] 사운드보드 자동 반응 처리 중 오류 발생: {e}")
 
 def run_text_task(task_id, user, guild, text):
     threading.Thread(target=process_text, args=(task_id, user, guild, text), daemon=True).start()
